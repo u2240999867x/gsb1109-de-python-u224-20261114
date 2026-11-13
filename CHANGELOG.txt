@@ -1,0 +1,541 @@
+====================
+ pyais CHANGELOG
+====================
+-------------------------------------------------------------------------------
+ Version 3.4.0 25 Oct 2026
+-------------------------------------------------------------------------------
+* `NMEAQueue` now uses the same assembly logic as the streams
+  * out-of-order and orphaned fragments are dropped
+  * removed attributes `buffer`, `tbq` and `last_wrapper`
+* new `NMEAAssembler` to assemble messages line by line via `feed()`
+* streams keep pending fragments between `next()` calls
+* new documentation theme
+-------------------------------------------------------------------------------
+ Version 3.3.1 11 Oct 2026
+-------------------------------------------------------------------------------
+* fixed: https://github.com/M0r13n/pyais/issues/227
+  * Claude Mythos 5.1 found several malformed inputs that raised plain Python
+    errors instead of `InvalidNMEAMessageException` (prompted by RIFAT KINALI @rifatkinali)
+  * a single malformed line could terminate `UDPReceiver`, `TCPConnection`
+    or `IterMessages`
+  * malformed input now raises `InvalidNMEAMessageException` and is skipped
+    by streams
+* fixed: https://github.com/M0r13n/pyais/issues/228
+  * `encode_dict(decode(raw).asdict())` raised `TypeError` for truncated
+    messages of type 6, 8 and 24
+  * found by Claude Mythos 5.1 (prompted by RIFAT KINALI @rifatkinali)
+* stricter validation of NMEA sentences
+  * non-ASCII bytes in a sentence are rejected
+  * fill bits must be between 0 and 5
+  * fragment count must be between 1 and 9
+  * fragment number must be between 1 and the fragment count
+* `decode()` raises `InvalidNMEAMessageException` for out-of-range fragment
+  counts and numbers
+* tag blocks with a malformed checksum (missing, repeated `*` or non-hex) are
+  treated as invalid
+* stricter multi-fragment message assembly
+  * messages are only assembled from fragments received in order,
+    starting with fragment 1 (matches libais and gpsd behavior)
+  * orphaned fragments (no fragment 1 seen) and out-of-order fragments
+    are dropped instead of being buffered or merged
+-------------------------------------------------------------------------------
+ Version 3.3.0 04 Oct 2026
+-------------------------------------------------------------------------------
+* added support for additional AIS Application Specific Messages (Message Type 6)
+  * persons on board (DAC = 1 FID = 16), IMO236 and IMO289 variant
+  * clearance time to enter port (DAC = 1 FID = 18)
+  * berthing data (DAC = 1 FID = 20)
+  * area notices (DAC = 1 FID = 23)
+  * dangerous cargo indication (DAC = 1 FID = 25)
+    * decodes cargo subtypes for IMDG, IGC, BC and MARPOL codes
+    * added `amount_kg` and `unit_str`
+* significantly improved decoding performance on PyPy
+  * PyPy uses 64 bit machine words instead of bigints
+  * added a fast path for position reports (Message Type 1/2/3)
+  * 3-5x faster than CPython on large inputs once the JIT has warmed up
+  * PyPy is now part of the CI
+* slightly improved decoding performance on CPython
+* fixed encoding of variable-length binary fields that are not byte aligned
+* fixed encoding of empty variable-length binary fields
+  * previously, these fields were padded with zeros to their maximum width
+-------------------------------------------------------------------------------
+ Version 3.2.3 12 Sep 2026
+-------------------------------------------------------------------------------
+* fixed AIS encoding CLI
+* split `--talker` into `--talker-id` and `--sentence-type`
+-------------------------------------------------------------------------------
+ Version 3.2.2 30 Aug 2026
+-------------------------------------------------------------------------------
+* fixed: https://github.com/M0r13n/pyais/issues/213
+* previously, pyais incorrectly handled messages that span multiple recv calls
+-------------------------------------------------------------------------------
+ Version 3.2.1 09 Aug 2026
+-------------------------------------------------------------------------------
+* added support for an additional AIS Application Specific Message (Message Type 8)
+  * US environmental reports (DAC = 367 FID = 33)
+-------------------------------------------------------------------------------
+ Version 3.2.0 03 Aug 2026
+-------------------------------------------------------------------------------
+* significantly improved decoding performance
+  * optimized AIS payload decoding using a base64-backed bit unpacker
+  * reduced NMEA parsing overhead through caching and parser optimizations
+  * improved enum lookup performance
+* added support for additional AIS Application Specific Messages (Message Type 8)
+  * environmental reports (DAC = 1 FID = 26)
+  * area notices (DAC = 1 FID = 22/23)
+  * route information (DAC = 1 FID = 27/28)
+  * VTS and synthetic target reports
+* added new enums for SOLAS equipment status and vessel ice class
+* improved support for decoding application-specific AIS payloads
+-------------------------------------------------------------------------------
+ Version 3.1.0 06 Jun 2026
+-------------------------------------------------------------------------------
+* implemented a pre-computed decoder plan for each class (#206)
+  * improved decoding efficiency by ~20%
+* added `json_to_data` to aid in re-encoding JSON messages
+  * decodes the base64 string fields produced by `to_json` back into bytes
+* `encode_msg` & `encode_dict` now require a mandatory `sentence` argument
+  * !BREAKING CHANGE!
+  * previously `talker_id` was used to pass both talker **and** sentence type
+  * this was incorrect and did not match the implementation in `messages.py`
+  * before: `encode_msg(talker_id="AIVDO", ...)`
+  * after:  `encode_msg(talker_id="AI", sentence_type="VDO", ...)`
+-------------------------------------------------------------------------------
+ Version 3.0.1 24 May 2026
+-------------------------------------------------------------------------------
+* added message 8 subtypes for inland AIS
+  * EMMA warning with DAC = 200 FID = 23
+  * Water level with DAC = 200 FID = 24
+  * Signal strength with DAC = 200 FID = 40
+-------------------------------------------------------------------------------
+ Version 3.0.0 12 Apr 2026
+-------------------------------------------------------------------------------
+* breaking changes
+  * removed `bitarray` dependency. Replaced with a custom `bit_vector`
+  * renamed `AISSentence.bit_array` to `AISSentence.bv`
+  * renamed `Payload.from_bitarray()` to `Payload.from_vector()`
+  * renamed `Payload.to_bitarray()` to `Payload.to_bytes()`
+  * changed overflow encoding behavior
+    * values exceeding field width now encode to `0` instead of being masked
+  * deprecated `NonPrintableCharacterException`
+  * dropped support for Python 3.9
+* removed `bitarray` as an external dependency
+* improved performance through a custom bit vector implementation
+* optimized single-fragment message assembly
+* NOTE: If you are not ready to migrate, v2 continues to receive bugfixes on the `legacy` branch
+-------------------------------------------------------------------------------
+ Version 2.20.1 28 Mar 2026
+-------------------------------------------------------------------------------
+* this release reduces the supply chain attack surface
+  * pins dependencies
+  * pins workflows
+  * adds a SHA256 hash sum for deployed artifacts
+  * migrates to PyPI trusted publishing
+-------------------------------------------------------------------------------
+ Version 2.20.0 08 Mar 2026
+-------------------------------------------------------------------------------
+* adds support for message type 28 (Aid-to-Navigation Report, single-slot)
+  - defined in ITU-R M.1371-6
+* thanks to Bettina Kutschera and JDS for providing up-to-date documentation
+-------------------------------------------------------------------------------
+ Version 2.15.0 11 Jan 2026
+-------------------------------------------------------------------------------
+* closes: https://github.com/M0r13n/pyais/issues/198
+* AISTracker.update now accepts raw sentences as well as decoded messages
+-------------------------------------------------------------------------------
+ Version 2.14.0 07 Dec 2025
+-------------------------------------------------------------------------------
+* closes: https://github.com/M0r13n/pyais/issues/196
+* add support for AIS Message Type 24 Part B auxiliary craft variant
+* auxiliary craft now decode mothership MMSI instead of vessel dimensions
+-------------------------------------------------------------------------------
+ Version 2.13.3 15 Nov 2025
+-------------------------------------------------------------------------------
+* fixed: https://github.com/M0r13n/pyais/issues/194
+* added missing line breaks for multi-part messages (ais-encode)
+-------------------------------------------------------------------------------
+ Version 2.13.2 30 Aug 2025
+-------------------------------------------------------------------------------
+* drop support for Python 3.8
+-------------------------------------------------------------------------------
+ Version 2.13.1 21 Aug 2025
+-------------------------------------------------------------------------------
+* add support for handling client timeouts in TCP server
+-------------------------------------------------------------------------------
+ Version 2.13.0 11 Aug 2025
+-------------------------------------------------------------------------------
+* added a TCP server capable of handling multiple concurrent client connections
+  * https://github.com/M0r13n/pyais?tab=readme-ov-file#tcp-server
+-------------------------------------------------------------------------------
+ Version 2.12.0 12 Jul 2025
+-------------------------------------------------------------------------------
+* BREAKING: Renamed pyais/main.py to pyais/ais_decode.py
+  * direct imports from pyais.main will fail
+* added ais-encode as installable CLI tool via pip install
+-------------------------------------------------------------------------------
+ Version 2.11.1 30 Jun 2025
+-------------------------------------------------------------------------------
+* apply fix from https://gitlab.com/holado_framework/python (@gassho)
+* pyais now handles type 16 messages shorter than 96 bit correctly
+* breaking: added two classes for type 16 - `isinstance(msg, MessageType16)` checks will need updating
+-------------------------------------------------------------------------------
+ Version 2.11.0 28 Jun 2025
+-------------------------------------------------------------------------------
+* apply fixes from https://gitlab.com/holado_framework/python (@gassho)
+* closes: https://github.com/M0r13n/pyais/issues/183
+-------------------------------------------------------------------------------
+ Version 2.10.0 22 Jun 2025
+-------------------------------------------------------------------------------
+* renamed custom `JSONEncoder` to `AISJSONEncoder` to avoid confusion with `json.JSONEncoder`
+* refactored main.py (`ais-decode`) for better error handling
+* added examples/ais-encode
+-------------------------------------------------------------------------------
+ Version 2.9.4 24 May 2025
+-------------------------------------------------------------------------------
+* better error handling of invalid fragment counts
+* closes: https://github.com/M0r13n/pyais/issues/177
+-------------------------------------------------------------------------------
+ Version 2.9.3 24 May 2025
+-------------------------------------------------------------------------------
+* add support for variant of message type 8 (@SiggyF)
+* closes: https://github.com/M0r13n/pyais/issues/174
+-------------------------------------------------------------------------------
+ Version 2.9.2 23 Mar 2025
+-------------------------------------------------------------------------------
+* fix compatibility with Python 3.8
+-------------------------------------------------------------------------------
+ Version 2.9.1 16 Mar 2025
+-------------------------------------------------------------------------------
+* added method to create tag blocks: `TagBlock.create(...)`
+-------------------------------------------------------------------------------
+ Version 2.9.0 23 Feb 2025
+-------------------------------------------------------------------------------
+* added NMEAQueue class
+  * supports both single-line and multi-line NMEA sentences
+  * buffers fragments until all parts are available
+  * handles tag blocks
+  * supports gatehouse wrappers
+-------------------------------------------------------------------------------
+ Version 2.8.4 26 Jan 2025
+-------------------------------------------------------------------------------
+* closes #161: https://github.com/M0r13n/pyais/issues/161
+  * adds property `full_name` to message type 21
+-------------------------------------------------------------------------------
+ Version 2.8.3 20 Dec 2024
+-------------------------------------------------------------------------------
+* closes #157: https://github.com/M0r13n/pyais/issues/157
+  * pyais now handles framgmented messages where at least one fragment has an empty payload gracefully
+  * added a new exception `MissingPayloadException`
+    * raised if the assembled payload is empty
+-------------------------------------------------------------------------------
+ Version 2.8.2 11 Nov 2024
+-------------------------------------------------------------------------------
+* closes #154: https://github.com/M0r13n/pyais/issues/154
+  * enums now return their underlying value when converted using `__str__()`
+-------------------------------------------------------------------------------
+ Version 2.8.1 19 Oct 2024
+-------------------------------------------------------------------------------
+* closes #153: https://github.com/M0r13n/pyais/pull/153
+-------------------------------------------------------------------------------
+ Version 2.8.0 21 Sep 2024
+-------------------------------------------------------------------------------
+* closes #150: NMEA tag blocks (thanks to @Leila-Codes)
+* adds TagBlockQueue: rudimentary support for NMEA tag block grouping
+-------------------------------------------------------------------------------
+ Version 2.7.2 19 Aug 2024
+-------------------------------------------------------------------------------
+* removes `reuse` for TCP/UDP sockets
+-------------------------------------------------------------------------------
+ Version 2.7.1 17 Aug 2024
+-------------------------------------------------------------------------------
+* exposes `close()` for TCP/UDP sockets (@mib1185)
+-------------------------------------------------------------------------------
+ Version 2.7.0 27 Jul 2024
+-------------------------------------------------------------------------------
+* adds the `PreprocessorProtocol` to support custom message formats
+* DROPS support for Python 3.7 (EOL)
+* minor correction in the documentation (thanks to @lsamaciel)
+-------------------------------------------------------------------------------
+ Version 2.6.6 26 Jun 2024
+-------------------------------------------------------------------------------
+* improves the API of `FilterChain`
+  * `FilterChain.filter(stream)` now accepts a stream instance
+  * this stream MUST implement the `Stream` interface defined in pyais.stream
+  * individual messages can be filtered using `IterMessages(...)`
+-------------------------------------------------------------------------------
+ Version 2.6.5 10 May 2024
+-------------------------------------------------------------------------------
+* merges https://github.com/M0r13n/pyais/pull/135 (by @prefixFelix)
+  * fixed the length of the UTC hour and minute field
+* closes https://github.com/M0r13n/pyais/issues/136
+  * resolved logic error to accurately distinguish between SOTDMA and ITDMA communication states
+-------------------------------------------------------------------------------
+ Version 2.6.4 27 Apr 2024
+-------------------------------------------------------------------------------
+* merges https://github.com/M0r13n/pyais/pull/134 (by @alfonnews)
+* adds additional fields to `AISTrack`
+-------------------------------------------------------------------------------
+ Version 2.6.3 05 Apr 2024
+-------------------------------------------------------------------------------
+* closes https://github.com/M0r13n/pyais/issues/131
+* pyais now supports country codes/names using `get_country(mmsi)`
+-------------------------------------------------------------------------------
+ Version 2.6.2 16 Mar 2024
+-------------------------------------------------------------------------------
+* fixes inconsistent rounding behavior for ROT values
+* https://github.com/M0r13n/pyais/pull/130
+-------------------------------------------------------------------------------
+ Version 2.6.1 20 Jan 2024
+-------------------------------------------------------------------------------
+* fixes a logic bug in `NoneFilter`
+* https://github.com/M0r13n/pyais/issues/128
+-------------------------------------------------------------------------------
+ Version 2.6.0 28 Dec 2023
+-------------------------------------------------------------------------------
+* Initial release of the AIS Filters system.
+* Basic filtering classes: `NoneFilter`, `MessageTypeFilter`, and `DistanceFilter`.
+* `FilterChain` class to combine multiple filters into a sequence.
+* Utility functions `haversine` and `is_in_grid` for distance and grid calculations.
+
+-------------------------------------------------------------------------------
+ Version 2.5.9 26 Nov 2023
+-------------------------------------------------------------------------------
+* adds `decode_nmea_and_ais`
+  * use this method to get a tuple of NMEASentence and AIS payload
+  * chore: also adds another example regarding tag blocks
+-------------------------------------------------------------------------------
+ Version 2.5.8 01 Oct 2023
+-------------------------------------------------------------------------------
+* bug fix: Navigational statuses 9, 10, 13 and Ship type 29
+  * closes https://github.com/M0r13n/pyais/issues/123
+  * adds Navigational statuses 9, 10, 13 to NavigationStatus
+  * adds Ship type 29 to ShipType
+-------------------------------------------------------------------------------
+ Version 2.5.7 29 Jul 2023
+-------------------------------------------------------------------------------
+* bug fix: EpfdType Enum Missing InternalGNSS
+  * closes https://github.com/M0r13n/pyais/issues/121
+-------------------------------------------------------------------------------
+ Version 2.5.6 29 Jul 2023
+-------------------------------------------------------------------------------
+* bug fix: lazily yield file-like objects by removing `.readlines()`
+  * closes https://github.com/M0r13n/pyais/pull/119
+
+-------------------------------------------------------------------------------
+ Version 2.5.5 16 Jun 2023
+-------------------------------------------------------------------------------
+* bug fix: incorrect logic for type 26 messages
+  * closes https://github.com/M0r13n/pyais/issues/116
+
+-------------------------------------------------------------------------------
+ Version 2.5.4 30 May 2023
+-------------------------------------------------------------------------------
+* bug fix: the streaming classes previously prepended partial lines to subsequent lines
+
+-------------------------------------------------------------------------------
+ Version 2.5.3 27 May 2023
+-------------------------------------------------------------------------------
+* bug fix: the streaming classes now handle universal line breaks
+  * user reported issues while receiving AIS messages through a socket
+  * pyais assumed that lines are always terminated with CRLF
+  * now pyais supports both CRLF as well as LF as line breaks
+
+-------------------------------------------------------------------------------
+ Version 2.5.2 04 Mar 2023
+-------------------------------------------------------------------------------
+* closes https://github.com/M0r13n/pyais/issues/100
+  * updated Aid to Navigation dict (NavAid)
+
+-------------------------------------------------------------------------------
+ Version 2.5.1 26 Feb 2023
+-------------------------------------------------------------------------------
+* closes https://github.com/M0r13n/pyais/issues/107
+  * fixes a rounding error for lat/lon values
+
+-------------------------------------------------------------------------------
+ Version 2.5.0 14 Jan 2023
+-------------------------------------------------------------------------------
+* introduce `AISracker` class
+  * adds the ability to collect and maintain the state of individual vessels over time
+* closes https://github.com/M0r13n/pyais/pull/103
+  * allows tag blocks to contain multiple : in field data
+
+-------------------------------------------------------------------------------
+ Version 2.4.0 21 Dec 2022
+-------------------------------------------------------------------------------
+* supports optional tag blocks for NMEA messages
+
+-------------------------------------------------------------------------------
+ Version 2.3.1 17 Dec 2022
+-------------------------------------------------------------------------------
+* closes https://github.com/M0r13n/pyais/issues/94
+  * removed unnecessary padding (`@`) from variable length text/data fields
+  * introduced a new keyword `variable_length` to the `bit_field` method:
+    * boolean value that defaults to `False`
+    * marks fields as variable in length (width)
+    * used by the encoder to decide whether to add trailing `@`s as padding
+
+-------------------------------------------------------------------------------
+ Version 2.3.0 11 Dec 2022
+-------------------------------------------------------------------------------
+* closes https://github.com/M0r13n/pyais/issues/91
+  * supports Gatehouse wrappers used to add extra information
+* renames `NMEAMessage` to `NMEASentence`
+
+-------------------------------------------------------------------------------
+ Version 2.2.4 11 Nov 2022
+-------------------------------------------------------------------------------
+* ignores `NonPrintableCharacterException` exceptions when using stream readers
+* such messages are simply skipped
+
+-------------------------------------------------------------------------------
+ Version 2.2.3 04 Nov 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/88
+  * make the decoder more liberal by not raising an exception when the payload contains special characters
+  * replace the `ValueError` with a `NonPrintableCharacterException` in case that non printable characters are passed to the decode function
+
+-------------------------------------------------------------------------------
+ Version 2.2.2 13 Oct 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/86
+  * ensure that the payload is always identical - even for multiple encode/decode roundtrips
+  * the `turn` field can now never be `None` and is instead an instance of the newly created `TurnRate` enum
+
+-------------------------------------------------------------------------------
+ Version 2.2.1 03 Oct 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/81
+  * ensure that the NMEA sentence length does not exceed 82 characters
+
+-------------------------------------------------------------------------------
+ Version 2.2.0 02 Oct 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/82
+  * introduces optional error_if_checksum_invalid keyword (default=False)
+  * adds the possibility to raise an exception if the checksum is invalid
+
+-------------------------------------------------------------------------------
+ Version 2.1.2 14 May 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/17
+  * decoded `radio state` fields
+  * provided functions to access SOTDMA/ITDMA communication state information
+
+-------------------------------------------------------------------------------
+ Version 2.1.1 24 Apr 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/65
+  * makes lat and lon signed for type 27 messages
+* drops nosetest as a development dependency
+
+
+-------------------------------------------------------------------------------
+ Version 2.1.0 14 Apr 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/63#issuecomment-1099045541
+  * unifies naming of fields across all message types
+  * makes all single bit fields booleans
+  * replaces the raw turn value with the actual rate of turn: (turn/4.733)**2
+  * makes all data fields raw bytes instead of (large) integers for interoperability
+  * makes speed and course floats instead of ints
+  * enforces strict types and fixes typing inconsistencies
+
+-------------------------------------------------------------------------------
+ Version 2.0.3 27 Mar 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/54
+  * for some fields like speed, lat or lon their types were not properly
+    enforced. This led to typing errors and wrong values, e.g. `0` instead
+    of `0.0`.
+
+* Closes https://github.com/M0r13n/pyais/issues/59
+  * when encoding messages the underlying method `int_to_bin` incorrectly
+    assumed that all values were signed. This was wrong and could lead to
+    invalid messages, when encoding.
+
+* Closes https://github.com/M0r13n/pyais/issues/58
+  * A missing checksum caused a `ValueError`, which is now ignored
+
+-------------------------------------------------------------------------------
+ Version 2.0.2  20 Mar 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/55
+  * Makes the attribute `raim` always an boolean
+
+* Closes https://github.com/M0r13n/pyais/issues/54
+  * Ensure that the attributes speed, lat, lon and course are always `float`
+
+-------------------------------------------------------------------------------
+ Version 2.0.1  6 Feb 2022
+-------------------------------------------------------------------------------
+* Closes https://github.com/M0r13n/pyais/issues/52
+  * renames shipname to name for type 21
+
+-------------------------------------------------------------------------------
+ Version 2.0.0-alpha  6 Feb 2022
+-------------------------------------------------------------------------------
+
+* WARNING: The v2 release will introduce breaking changes
+* Introduces the possibility to encode messages
+* decoding has been rewritten and implements an iterative decoding approach
+* The following fields were renamed:
+    * message_fragments -> frag_cnt
+    * fragment_number -> frag_num
+    * message_id -> seq_id
+    * type -> msg_type
+    * shiptype -> ship_type
+* `msg.decode()` does not return a `pyais.messages.AISMessage` instance anymore
+  * instead an instance of `pyais.messages.MessageTypeX` is returned, where `X` is the type of the message (1-27)
+* in v1 you called `decoded.content` to get the decoded message as a dictionary - this is now `decoded.asdict()`
+
+
+-------------------------------------------------------------------------------
+ Version 1.6.2  2 May 2021
+-------------------------------------------------------------------------------
+
+* Improves `decode_msg` by adding meaningful error messages
+
+-------------------------------------------------------------------------------
+ Version 1.6.0  2 May 2021
+-------------------------------------------------------------------------------
+
+
+* Makes `NMEAMessage` subscribable
+* Adds documentation on readthedocs.org
+* Renames instance attributes of `NMEAMessage`:
+    - msg_type to type
+    - count to message_fragments
+    - index to fragment_number
+    - seq_id to message_id
+    - data to payload#
+* Adds fill_bits field to NMEAMessage
+
+-------------------------------------------------------------------------------
+ Version 1.4.0  6 Mar 2021
+-------------------------------------------------------------------------------
+
+
+* Pyais comes with a commandline utility now
+    - `ais-decode` can decode single messages or files
+    - you can read from a TCP/UDP socket from the terminal
+    - no need to write Python code
+
+* Improves Socket API
+
+
+-------------------------------------------------------------------------------
+ Version 1.3.1  2 Jan 2021
+-------------------------------------------------------------------------------
+
+
+* Simple bug fix
+    - Store `mothership_mmsi` as 9-digit string
+
+
+-------------------------------------------------------------------------------
+ Version 1.3.0  2 Jan 2021
+-------------------------------------------------------------------------------
+
+* Major API changes
+  - MMSI is stored as string with leading zeros (up to 9 chars) (#6)
