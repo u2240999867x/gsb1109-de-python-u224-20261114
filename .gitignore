@@ -1,0 +1,67 @@
+*.py[co]
+
+# OS
+.directory
+.DS_Store
+
+# Archives
+*.gz
+*.zip
+*.gz.1
+
+# Packages
+*.egg
+*.egg-info
+dist
+build
+eggs
+parts
+bin
+var
+sdist
+develop-eggs
+.installed.cfg
+MANIFEST
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+.tox
+exif-samples*
+
+# Translations
+*.mo
+
+# IDE
+.vscode/
+.idea
+.mr.developer.cfg
+.project
+.pydevproject
+.settings
+
+# Temp files
+*.swp
+*-swp
+
+# Environments
+.env
+.venv
+.venv*
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# mypy
+.mypy_cache/
+.mypy_cache
+.dmypy.json
+dmypy.json
+
+# tests
+dump_test.txt
