@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2024 pydot contributors
+#
+# SPDX-License-Identifier: MIT
+
+*.py eol=lf
+*.dot eol=lf
+*.txt eol=lf
+*.md eol=lf
+*.yml eol=lf
+
+*.png binary
+*.ps binary
+
