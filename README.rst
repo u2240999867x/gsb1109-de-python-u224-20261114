@@ -50,6 +50,49 @@ and avoid using an external process::
         f.write(b"Hello")
 
 
+Reconciling two compressed files
+--------------------------------
+
+``xopen.reconcile`` compares the logical lines of two compressed files as a
+multiset. The two inputs may use different compression formats, for example a
+bzip2 file on the left and a Zstandard file on the right. Line order is
+ignored, but the number of copies of every distinct line is accounted for
+exactly. Line identity is kept as raw bytes (no text decoding), and
+``newline_equivalent`` lets the caller decide whether CRLF and LF line endings
+count as equal::
+
+    from xopen.reconcile import reconcile_lines
+
+    summary = reconcile_lines(
+        "left.txt.bz2",
+        "right.txt.zst",
+        newline_equivalent=True,
+        memory_budget=512 * 1024 * 1024,
+    )
+    print(summary.left_missing_total, summary.right_missing_total)
+    for difference in summary.differences:
+        print(
+            difference.line,
+            difference.left_count,
+            difference.right_count,
+            difference.left_occurrences[:3],
+        )
+
+Each :class:`~xopen.reconcile.LineDifference` carries the exact counts on both
+sides, how many copies are missing on each side, and reviewable occurrence
+positions (1-based line number and byte offset in the decompressed data).
+Position lists are capped at ``max_occurrences`` while counts always stay
+exact; the ``*_occurrences_truncated`` flags indicate a capped list.
+
+Data sets larger than ``memory_budget`` are handled by spilling sorted
+temporary runs to disk and merging them with a bounded number of open files,
+so memory usage stays within the budget at any input size. Use
+:func:`~xopen.reconcile.iter_line_differences` to stream differences instead
+of materializing them. If either archive cannot be decompressed completely
+(for example a truncated file), a :class:`~xopen.reconcile.ReconcileError` is
+raised and no difference report is produced.
+
+
 The ``xopen`` function
 ----------------------
 
