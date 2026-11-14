@@ -379,7 +379,7 @@ with IterMessages(messages) as s:
 
 ## Tag Block Queue (grouping)
 
-Every class that implements the streaming API accepts an optional keyword argument `tbq`, which is set to `None` by default. When tbq is provided, it can be used as a queue for handling NMEA tag blocks. The queue's `get_nowait()` method allows you to retrieve a list of NMEASentence objects, but only when the entire group has been received (i.e., all sentences within the group are complete). It is important to note that this is rudimentary support for tag block groups, as pyais primarily focuses on processing AIS messages and abstracts away NMEA sentences from the user.
+Every class that implements the streaming API accepts an optional keyword argument `tbq`, which is set to `None` by default. When tbq is provided, it can be used as a queue for handling NMEA tag blocks. The queue's `get_nowait()` method returns a group once all of its sentences have arrived. Groups are scoped by receiving station (the tag block `s:` field), so two stations that reuse the same group id are kept apart, and each sentence keeps its original `line_number`. A group can contain several complete AIS messages; `flush()` reports pending groups, including ones that are still missing a line, so their complete messages can still be decoded.
 
 ```py
 with FileReaderStream('/path/to/file.nmea', tbq=TagBlockQueue()) as stream:
@@ -387,9 +387,26 @@ with FileReaderStream('/path/to/file.nmea', tbq=TagBlockQueue()) as stream:
 
     for msg in stream:
         try:
-            print(tbq.get_nowait())
+            group = tbq.get_nowait()
+            print(group.station, group.group_id, group.missing_lines)
         except queue.Empty:
             pass
+
+    for group in tbq.flush():
+        print(group.station, group.group_id, group.missing_lines)
+```
+
+For nested replays, `read_replay()`/`parse_replay()` keep the outer tag group and the inner AIS messages together with their line numbers and missing fragments; reading the same station files in the opposite order produces the same attribution and missing-fragment list.
+
+```py
+from pyais.replay import read_replay
+
+result = read_replay(['station-a.ais', 'station-b.ais'])
+for group in result.groups:
+    print(group.station, group.group_id, group.line_numbers, group.missing_lines)
+    for message in group.complete_messages:
+        print(message.line_numbers, message.decode())
+print(result.missing_fragments)
 ```
 
 # Gatehouse wrappers

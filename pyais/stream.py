@@ -59,11 +59,91 @@ class PreprocessorProtocol(typing.Protocol):
         pass
 
 
+class TagBlockGroupResult(list):  # type: ignore[type-arg]
+    """The list of sentences of one outer tag block group.
+
+    It behaves like the plain list that :class:`TagBlockQueue` used to return,
+    but also records which receiving station and group the sentences belong
+    to, their original line numbers and which group sentences never arrived.
+    """
+
+    def __init__(
+        self,
+        sentences: typing.Iterable[NMEASentence],
+        station: typing.Optional[str] = None,
+        group_id: typing.Optional[int] = None,
+        sentence_total: typing.Optional[int] = None,
+        sentence_numbers: typing.Optional[typing.Iterable[int]] = None,
+        line_numbers: typing.Optional[typing.Iterable[typing.Optional[int]]] = None,
+        missing_lines: typing.Iterable[int] = (),
+    ) -> None:
+        super().__init__(sentences)
+        self.station = station
+        self.group_id = group_id
+        self.sentence_total = sentence_total
+        self.sentence_numbers = tuple(sentence_numbers or ())
+        self.line_numbers = tuple(line_numbers or ())
+        self.missing_lines = tuple(missing_lines)
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing_lines
+
+    @property
+    def missing_sentence_numbers(self) -> typing.Tuple[int, ...]:
+        return self.missing_lines
+
+    @property
+    def messages(self) -> typing.List[typing.Any]:
+        """The inner AIS messages assembled from this group's sentences.
+
+        Complete messages remain decodable even when the group itself is
+        missing a line. Uses the same matching rules as the replay layer.
+        """
+        from pyais.replay import ReplayLine, assemble_messages
+        lines = [
+            ReplayLine(
+                sentence=sentence,
+                source=getattr(sentence, 'source', None),
+                line_number=getattr(sentence, 'line_number', 0) or 0,
+                station=self.station,
+                group_id=self.group_id,
+                group_sentence_num=getattr(sentence, 'group_sentence_num', None),
+                group_sentence_total=self.sentence_total,
+            )
+            for sentence in self
+        ]
+        return assemble_messages(lines)
+
+    @property
+    def complete_messages(self) -> typing.List[typing.Any]:
+        return [message for message in self.messages if message.complete]
+
+    @property
+    def incomplete_messages(self) -> typing.List[typing.Any]:
+        return [message for message in self.messages if not message.complete]
+
+    @property
+    def missing_fragments(self) -> typing.Dict[typing.Any, typing.Tuple[int, ...]]:
+        return {
+            (message.station, message.group_id, message.line_numbers): message.missing_fragments
+            for message in self.incomplete_messages
+        }
+
+
 class TagBlockQueue(queue.Queue):  # type: ignore
 
     def __init__(self, maxsize: int = 0) -> None:
-        self.groups: typing.Dict[str, typing.Dict[str, object]] = {}
+        # Outer groups are scoped by receiving station, so two stations that
+        # reuse the same group id never exchange sentences.
+        self.groups: typing.Dict[typing.Tuple[typing.Optional[str], int], typing.Dict[str, object]] = {}
         super().__init__(maxsize)
+
+    @staticmethod
+    def _scope_of(sentence: NMEASentence, station: typing.Optional[str]) -> typing.Optional[str]:
+        if station is not None:
+            return station
+        return getattr(sentence, 'source', None)
 
     def put_sentence(self, sentence: NMEASentence) -> None:
         if not sentence.tag_block:
@@ -80,31 +160,128 @@ class TagBlockQueue(queue.Queue):  # type: ignore
             super().put([sentence,])
             return
 
-        if int(tb.group.sentence_tot) == 1:
-            # Group of a single sentence
-            super().put([sentence,])
+        station = typing.cast(typing.Optional[str], tb.source_station)
+        scope = self._scope_of(sentence, station)
+        key = (scope, tb.group.group_id)
+        sentence_total = int(tb.group.sentence_tot)
+        sentence_num = int(tb.group.sentence_num)
+
+        if sentence_total == 1:
+            # Group of a single sentence. It is complete on its own, but still
+            # carries its outer-group attribution.
+            super().put(TagBlockGroupResult(
+                [sentence],
+                station=station,
+                group_id=tb.group.group_id,
+                sentence_total=1,
+                sentence_numbers=[sentence_num],
+                line_numbers=[typing.cast(typing.Optional[int], getattr(sentence, 'line_number', None))],
+            ))
+            return
+        group = self.groups.get(key)
+
+        if group is None:
+            # A sentence without an ``s:`` station still belongs to the one
+            # group of that id if that group is unambiguous. A repeated
+            # sentence number is a new incarnation, and an explicitly tagged
+            # sentence never joins a group of another station.
+            candidates: typing.List[typing.Tuple[typing.Tuple[typing.Optional[str], int], typing.Dict[str, object]]] = []
+            for candidate_key, candidate in self.groups.items():
+                if candidate_key[1] != tb.group.group_id:
+                    continue
+                candidate_members: typing.Dict[int, NMEASentence] = candidate['sentences']  # type: ignore
+                if sentence_num in candidate_members:
+                    continue
+                other_station = typing.cast(typing.Optional[str], candidate['station'])
+                if station is not None and other_station is not None and station != other_station:
+                    continue
+                if station is None and scope is not None:
+                    sources = {getattr(line, 'source', None) for line in candidate_members.values()}
+                    if scope not in sources:
+                        continue
+                candidates.append((candidate_key, candidate))
+
+            if len(candidates) == 1:
+                key, group = candidates[0]
+                if station is not None and group['station'] is None:
+                    group['station'] = station
+                    group['scope'] = station
+                    del self.groups[key]
+                    key = (station, tb.group.group_id)
+                    self.groups[key] = group
+                elif station is None:
+                    station = typing.cast(typing.Optional[str], group['station'])
+                    scope = typing.cast(typing.Optional[str], group['scope'])
+
+        if group is None:
+            group = {
+                'station': station,
+                'scope': scope,
+                'group_id': tb.group.group_id,
+                'sentence_total': sentence_total,
+                'sentences': {},
+            }
+            self.groups[key] = group
+        else:
+            group['sentence_total'] = sentence_total
+
+        members: typing.Dict[int, NMEASentence] = group['sentences']  # type: ignore
+        # A repeated sentence number starts a new incarnation of a reused id.
+        # Emit the old incarnation first: its complete messages still count.
+        if sentence_num == 1 and 1 in members:
+            self._put_group(key, group)
+            group = {
+                'station': station,
+                'scope': scope,
+                'group_id': tb.group.group_id,
+                'sentence_total': sentence_total,
+                'sentences': {},
+            }
+            self.groups[key] = group
+            members = group['sentences']  # type: ignore
+
+        members.setdefault(sentence_num, sentence)
+
+        if sentence_total != len(members):
             return
 
-        if int(tb.group.sentence_num) == 1:
-            # The first sentence
-            self.groups[tb.group.group_id] = {'sentence_tot': tb.group.sentence_tot, 'sentences': [sentence,]}
-            return
+        self._put_group(key, group)
+        del self.groups[key]
 
-        if tb.group.group_id not in self.groups:
-            # Unknown group. First sentence of group is missing.
-            return
+    def _put_group(self,
+                   key: typing.Tuple[typing.Optional[str], int],
+                   group: typing.Dict[str, object]) -> TagBlockGroupResult:
+        members: typing.Dict[int, NMEASentence] = group['sentences']  # type: ignore
+        sentence_total = int(group['sentence_total'])  # type: ignore
+        # Preserve arrival order, as the queue always has.
+        numbers = list(members)
+        missing = tuple(n for n in range(1, sentence_total + 1) if n not in members)
+        result = TagBlockGroupResult(
+            (members[n] for n in numbers),
+            station=group['station'],  # type: ignore
+            group_id=group['group_id'],  # type: ignore
+            sentence_total=sentence_total,
+            sentence_numbers=numbers,
+            line_numbers=[typing.cast(typing.Optional[int], getattr(members[n], 'line_number', None)) for n in numbers],
+            missing_lines=missing,
+        )
+        # Keep the historical return type: a list of NMEASentence objects.
+        super().put(result)
+        return result
 
-        self.groups[tb.group.group_id]['sentences'].append(sentence)  # type: ignore
+    def flush(self) -> typing.List[TagBlockGroupResult]:
+        """Enqueue every pending group, complete messages included.
 
-        # is_last_sentence = int(tb.group.sentence_num) != int(self.groups[tb.group.group_id]['sentence_tot'])
-        group_is_complete = int(tb.group.sentence_tot) != len(self.groups[tb.group.group_id]['sentences'])  # type: ignore
-
-        if group_is_complete:
-            return
-
-        # All sentences belonging to this group were received.
-        super().put(self.groups[tb.group.group_id]['sentences'])
-        del self.groups[tb.group.group_id]
+        This is meant for end-of-recording cleanup. A group that is missing
+        one line is still emitted: callers can decode the complete inner
+        messages it contains and inspect ``missing_lines`` for the rest.
+        The returned list holds the emitted groups in input order.
+        """
+        results: typing.List[TagBlockGroupResult] = []
+        for key in list(self.groups):
+            results.append(self._put_group(key, self.groups[key]))
+            del self.groups[key]
+        return results
 
 
 class NMEAAssembler:
@@ -126,12 +303,17 @@ class NMEAAssembler:
     def __init__(self, tbq: typing.Optional[TagBlockQueue] = None) -> None:
         self.wrapper_msg: typing.Optional[GatehouseSentence] = None
         self.tbq: typing.Optional[TagBlockQueue] = tbq
-        self.buffer: typing.Dict[typing.Tuple[int, str, str, str, int], typing.List[typing.Optional[NMEAMessage]]] = {}
+        self.buffer: typing.Dict[typing.Tuple[typing.Any, ...], typing.List[typing.Optional[NMEAMessage]]] = {}
+        # Provenance of buffered fragments, keyed like ``buffer``.
+        self.origins: typing.Dict[typing.Tuple[typing.Any, ...], typing.List[typing.Optional[typing.Tuple[typing.Optional[str], int]]]] = {}
+        self._line_number = 0
+        self._source: typing.Optional[str] = None
 
     def reset(self) -> None:
         """Discard pending fragments and any pending Gatehouse wrapper,
         e.g. after the underlying connection was interrupted."""
         self.buffer.clear()
+        self.origins.clear()
         self.wrapper_msg = None
 
     def __set_last_wrapper_msg(self, wrapper_msg: GatehouseSentence) -> None:
@@ -154,13 +336,30 @@ class NMEAAssembler:
             return
         self.tbq.put_sentence(sentence)
 
-    def feed(self, line: bytes) -> typing.Optional[NMEAMessage]:
-        """Feed one raw line. Returns a complete sentence or None."""
+    def feed(self, line: bytes, source: typing.Optional[str] = None,
+             line_number: typing.Optional[int] = None) -> typing.Optional[NMEAMessage]:
+        """Feed one raw line. Returns a complete sentence or None.
+
+        ``source`` and ``line_number`` are optional provenance for replayed
+        recordings. They are attached to the parsed sentence and to an
+        assembled multipart message, and they take part in the buffer key so
+        that two stations sharing a sequence number cannot exchange fragments.
+        """
         buffer = self.buffer
+        origins = self.origins
         msg: AISSentence
+
+        if line_number is None:
+            self._line_number += 1
+            line_number = self._line_number
+        if source is not None:
+            self._source = source
 
         try:
             sentence = NMEASentenceFactory.produce(line)
+            sentence.line_number = line_number
+            if sentence.source is None:
+                sentence.source = self._source
             self.__add_to_tbq(sentence)
             if sentence.TYPE == GatehouseSentence.TYPE:
                 sentence = typing.cast(GatehouseSentence, sentence)
@@ -182,16 +381,20 @@ class NMEAAssembler:
         if seq_id is None:
             seq_id = -1
 
-        # A unique stream is identified by the following tuple
-        slot = (seq_id, msg.channel, msg.talker_id, msg.type, msg.frag_cnt)
+        # A unique stream is identified by the following tuple. The station
+        # (tag block ``s:`` or recording source) is part of it: sequence
+        # numbers are only unique per station.
+        slot = (msg.station, seq_id, msg.channel, msg.talker_id, msg.type, msg.frag_cnt)
 
         if msg.frag_num == 1:
             # start (overwrites any pending)
             buffer[slot] = [msg] + [None] * (msg.frag_cnt - 1)
+            origins[slot] = [(source, line_number)] + [None] * (msg.frag_cnt - 1)
         elif slot in buffer:
             if msg.frag_num == sum(p is not None for p in buffer[slot]) + 1:
                 # strictly contiguous
                 buffer[slot][msg.frag_num - 1] = msg
+                origins[slot][msg.frag_num - 1] = (source, line_number)
             else:
                 # drop out-of-order fragment
                 return None
@@ -204,8 +407,12 @@ class NMEAAssembler:
         if len(not_none_parts) < msg.frag_cnt:
             return None
 
+        fragment_origins = [o for o in origins[slot] if o is not None]
         del buffer[slot]
+        del origins[slot]
         msg = NMEAMessage.assemble_from_iterable(not_none_parts)
+        if any(number is not None for _, number in fragment_origins):
+            msg.line_numbers = [number for _, number in fragment_origins]
         return self.__insert_wrapper_msg(msg)
 
 
@@ -218,7 +425,10 @@ class AssembleMessages(ABC):
     def __init__(self, tbq: typing.Optional[TagBlockQueue] = None) -> None:
         # Owned by the stream rather than by one iteration, so fragments
         # survive between next() calls.
+        self.tbq = tbq
         self.assembler = NMEAAssembler(tbq)
+        self._line_number = 0
+        self._source: typing.Optional[str] = None
 
     def __enter__(self) -> "AssembleMessages":
         # Enables use of with statement
@@ -235,14 +445,34 @@ class AssembleMessages(ABC):
         return next(iter(self))
 
     def _assemble_messages(self) -> Generator[NMEAMessage, None, None]:
-        for line in self._iter_messages():
-            msg = self.assembler.feed(line)
+        for source, line in self._iter_sources():
+            self._line_number += 1
+            msg = self.assembler.feed(line, source=source, line_number=self._line_number)
             if msg is not None:
                 yield msg
+
+    def _iter_sources(self) -> Generator[typing.Tuple[typing.Optional[str], bytes], None, None]:
+        """Yield ``(source, line)`` pairs. Default source is ``None``."""
+        for line in self._iter_messages():
+            yield self._source, line
 
     @abstractmethod
     def _iter_messages(self) -> Generator[bytes, None, None]:
         raise NotImplementedError("Implement me!")
+
+    def feed_replay(self, lines: typing.Iterable[typing.Tuple[typing.Optional[str], int, bytes]]) -> typing.List[NMEAMessage]:
+        """Feed ``(source, line_number, raw)`` tuples and return all finished messages.
+
+        Line numbers are taken from the tuples instead of from the stream
+        position, so the result is independent of the order in which several
+        recordings are read.
+        """
+        finished: typing.List[NMEAMessage] = []
+        for source, line_number, line in lines:
+            msg = self.assembler.feed(line, source=source, line_number=line_number)
+            if msg is not None:
+                finished.append(msg)
+        return finished
 
 
 class IterMessages(AssembleMessages):
@@ -280,6 +510,18 @@ class IterMessages(AssembleMessages):
         # Transform self.messages into a generator
         yield from (message for message in self.messages)
 
+    def _iter_sources(self) -> Generator[typing.Tuple[typing.Optional[str], bytes], None, None]:
+        # Items may be (source, line_number, line) tuples for replay work.
+        source = self._source
+        for item in self.messages:
+            if isinstance(item, tuple) and len(item) == 3:
+                item_source, line_number, line = item
+                source = item_source
+                self._line_number = line_number - 1
+                yield source, line
+            else:
+                yield source, item
+
 
 class Stream(AssembleMessages, Generic[F], ABC):
 
@@ -309,6 +551,18 @@ class Stream(AssembleMessages, Generic[F], ABC):
                 line = self.preprocessor.process(line)
             if should_parse(line):
                 yield line
+
+    def _iter_sources(self) -> Generator[typing.Tuple[typing.Optional[str], bytes], None, None]:
+        # Count physical lines, so line numbers refer to the original file
+        # even when comments or garbage lines are skipped.
+        for number, line in enumerate(self.read(), 1):
+            if len(line) <= 10:
+                continue
+            if self.preprocessor is not None:
+                line = self.preprocessor.process(line)
+            if should_parse(line):
+                self._line_number = number - 1
+                yield self._source, line
 
     def close(self) -> None:
         if self._fobj is not None:
@@ -355,6 +609,8 @@ class FileReaderStream(BinaryIOStream):
         except Exception as e:
             raise FileNotFoundError(f"Could not open file {self.filename}") from e
         super().__init__(file, preprocessor=preprocessor, tbq=tbq)
+        # Untagged lines are scoped by recording, never mixed across files.
+        self._source = str(self.filename)
 
 
 class ByteStream(Stream[None]):
@@ -369,6 +625,8 @@ class ByteStream(Stream[None]):
         tbq: typing.Optional[TagBlockQueue] = None
     ) -> None:
         self.iterable: Iterable[bytes] = iterable
+        # Keep each byte stream isolated from other byte streams.
+        self._source = f'byte-stream-{id(self)}'
         super().__init__(None, preprocessor=preprocessor, tbq=tbq)
 
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:

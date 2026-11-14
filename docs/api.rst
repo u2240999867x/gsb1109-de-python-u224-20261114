@@ -163,9 +163,35 @@ All support the ``with`` statement and accept optional ``preprocessor`` and
    Import from ``pyais.stream``.
 
 ``TagBlockQueue(maxsize=0)``
-   A queue for grouping NMEA sentences by their tag block group ID.
+   A queue for grouping NMEA sentences by their tag block group ID. Groups are
+   scoped by receiving station, so equal ids from different stations are kept
+   apart. ``get_nowait()`` returns a group once all of its lines arrived.
+   ``flush()`` returns pending groups, including incomplete ones, so callers can
+   decode the complete messages they contain and inspect ``missing_lines``.
    Pass an instance to any stream class via the ``tbq`` argument.
    Import from ``pyais.stream``.
+
+``parse_replay(lines, source=None)``
+   Parse ``bytes``/``str`` lines, or ``(source, line_number, line)`` tuples,
+   into a :class:`ReplayResult`. Keeps outer tag block groups and inner AIS
+   messages, their station, original line numbers and missing fragments.
+   Import from ``pyais.replay`` or ``pyais``.
+
+``read_replay(paths, encoding='utf-8')``
+   Read one or more recordings with ``parse_replay``, keeping per-file line
+   numbers. The order in which the files are passed does not change the
+   attribution or the missing-fragment list.
+
+``ReplayParser``
+   Incremental API: ``feed(line, source=None, line_number=None)`` per line and
+   ``finish()`` for a :class:`ReplayResult`.
+
+``ReplayResult`` / ``ReplayGroup`` / ``ReplayMessage``
+   Nested replay model. A result has ``groups`` (outer tag groups) and
+   ``messages`` (inner AIS messages); a group has ``lines``, ``messages``,
+   ``line_numbers``, ``missing_lines``, ``complete_messages`` and
+   ``incomplete_messages``; a message has ``line_numbers``, ``fragments``,
+   ``missing_fragments``, ``complete`` and ``decode()``.
 
 ``NMEAQueue(maxsize=0, tbq=None)``
    A thread-safe queue for assembling NMEA sentences from raw lines.

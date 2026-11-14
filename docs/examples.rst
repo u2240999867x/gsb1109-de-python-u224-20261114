@@ -302,7 +302,11 @@ Work with tag blocks
 Group tag blocks
 ^^^^^^^^^^^^^^^^
 
-Use ``TagBlockQueue`` to buffer sentences until a tag block group is complete:
+Use ``TagBlockQueue`` to buffer sentences until a tag block group is complete.
+Groups are scoped by receiving station (the tag block ``s:`` field), so two
+stations that reuse the same group id are never mixed. Call ``flush()`` at the
+end of a recording to retrieve groups that are still missing a line; each
+complete inner message in such a group remains decodable:
 
 .. code-block:: python
 
@@ -313,7 +317,35 @@ Use ``TagBlockQueue`` to buffer sentences until a tag block group is complete:
    with FileReaderStream("sample.ais", tbq=tbq) as stream:
        for msg in stream:
            while not tbq.empty():
-               print(tbq.get_nowait())
+               group = tbq.get_nowait()
+               print(group.station, group.group_id, group.missing_lines)
+               for sentence in group:
+                   print(sentence.line_number, sentence.group)
+
+   # End of recording: also report groups that never completed.
+   for group in tbq.flush():
+       print(group.station, group.group_id, group.missing_lines)
+
+Replay several station files
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``parse_replay``/``read_replay`` keep both levels of membership: the outer tag
+block group and the inner AIS messages. Every line keeps its original line
+number, and fragments are matched per station and per sequence number, so equal
+sequence numbers from different stations never fill each other in. Reading the
+files in the opposite order yields the same attribution and missing-fragment
+list.
+
+.. code-block:: python
+
+   from pyais.replay import read_replay
+
+   result = read_replay(["station-a.ais", "station-b.ais"])
+   for group in result.groups:
+       print(group.station, group.group_id, group.line_numbers, group.missing_lines)
+       for message in group.complete_messages:
+           print(message.line_numbers, message.decode())
+   print(result.missing_fragments)
 
 Use NMEAQueue for thread-safe assembly
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

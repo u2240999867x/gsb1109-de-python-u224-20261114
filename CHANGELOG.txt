@@ -2,6 +2,19 @@
  pyais CHANGELOG
 ====================
 -------------------------------------------------------------------------------
+ Version 3.4.1 14 Nov 2026
+-------------------------------------------------------------------------------
+* replay historical AIS text with nested tag groups
+  * outer tag block groups are scoped by receiving station; inner AIS
+    messages are matched per station and sequence number
+  * every sentence and assembled message keeps its original line number
+  * `TagBlockQueue` keeps equal group ids of different stations apart, keeps
+    all inner messages of a group and can `flush()` incomplete groups while
+    their complete messages remain decodable
+  * new `pyais.replay` module: `parse_replay`, `read_replay`, `ReplayParser`
+  * reading station files in the opposite order yields the same attribution
+    and missing-fragment list
+-------------------------------------------------------------------------------
  Version 3.4.0 25 Oct 2026
 -------------------------------------------------------------------------------
 * `NMEAQueue` now uses the same assembly logic as the streams

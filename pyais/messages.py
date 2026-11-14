@@ -501,6 +501,9 @@ class NMEASentence(object):
         '_is_valid',
         'wrapper_msg',
         'tag_block',
+        'line_number',
+        'source',
+        'line_numbers',
     )
 
     TYPE = "UNDEFINED"
@@ -553,6 +556,15 @@ class NMEASentence(object):
         #           Therefore, TagBlocks are lazily evaluated (need to call tag_block.init() first)
         self.tag_block: typing.Optional['TagBlock'] = None
 
+        # Provenance of the line inside the replayed source. These stay None
+        # unless the message was parsed by the replay layer, which knows where
+        # each sentence came from.
+        self.line_number: typing.Optional[int] = None
+        self.source: typing.Optional[str] = None
+        # Set on assembled multi-part messages: the line number of every
+        # fragment, in fragment order.
+        self.line_numbers: typing.Optional[typing.List[int]] = None
+
     def __str__(self) -> str:
         return repr(self)
 
@@ -587,6 +599,55 @@ class NMEASentence(object):
     @is_valid.setter
     def is_valid(self, val: bool) -> None:
         self._is_valid = val
+
+    @property
+    def group(self) -> typing.Optional['TagBlockGroup']:
+        """The NMEA 4.10 ``g`` group of this sentence, if any."""
+        tag_block = self.tag_block
+        if tag_block is None:
+            return None
+        if not tag_block.initialized:
+            tag_block.init()
+        return typing.cast(typing.Optional['TagBlockGroup'], tag_block.group)
+
+    @property
+    def tag_block_group(self) -> typing.Optional['TagBlockGroup']:
+        """Alias for :attr:`group`."""
+        return self.group
+
+    @property
+    def group_id(self) -> typing.Optional[int]:
+        group = self.group
+        return group.group_id if group is not None else None
+
+    @property
+    def group_sentence_num(self) -> typing.Optional[int]:
+        group = self.group
+        return group.sentence_num if group is not None else None
+
+    @property
+    def group_sentence_total(self) -> typing.Optional[int]:
+        group = self.group
+        return group.sentence_tot if group is not None else None
+
+    @property
+    def source_station(self) -> typing.Optional[str]:
+        """The receiving station from the tag block ``s:`` field."""
+        tag_block = self.tag_block
+        if tag_block is None:
+            return None
+        if not tag_block.initialized:
+            tag_block.init()
+        return typing.cast(typing.Optional[str], tag_block.source_station)
+
+    @property
+    def station(self) -> typing.Optional[str]:
+        """The station this line belongs to.
+
+        Falls back to :attr:`source` for untagged input, so that lines read
+        from different files never get mixed up.
+        """
+        return self.source_station or self.source
 
 
 class GatehouseSentence(NMEASentence):
@@ -749,7 +810,8 @@ class AISSentence(NMEASentence):
         payload = b''
         is_valid = True
 
-        for i, msg in enumerate(sorted(messages, key=lambda m: m.frag_num)):
+        ordered = sorted(messages, key=lambda m: m.frag_num)
+        for i, msg in enumerate(ordered):
             if i > 0:
                 raw += b'\n'
             raw += msg.raw
@@ -760,6 +822,8 @@ class AISSentence(NMEASentence):
         messages[0].payload = payload
         messages[0].bv = bit_vector(payload, messages[-1].fill_bits)
         messages[0].is_valid = is_valid
+        if any(msg.line_number is not None for msg in ordered):
+            messages[0].line_numbers = [msg.line_number for msg in ordered if msg.line_number is not None]
         return messages[0]
 
     @property

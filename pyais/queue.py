@@ -33,6 +33,14 @@ class NMEAQueue(queue.Queue[AISSentence]):
         if msg is not None:
             super().put(msg, block, timeout)
 
+    def put_line_at(self, line: bytes, line_number: int, source: typing.Optional[str] = None,
+                    block: bool = True, timeout: typing.Optional[float] = None) -> None:
+        """Put a line together with its provenance (file and original line)."""
+        with self._feed_lock:
+            msg = self.assembler.feed(line, source=source, line_number=line_number)
+        if msg is not None:
+            super().put(msg, block, timeout)
+
     def get_or_none(self) -> typing.Optional[NMEASentence]:
         """Non-blocking helper method to retrieve the last message, if one is available"""
         try:
