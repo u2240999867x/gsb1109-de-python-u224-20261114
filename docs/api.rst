@@ -210,6 +210,20 @@ Tracking
    ``lon``, ``lat``, ``course``, ``heading``, ``imo``, ``callsign``,
    ``shipname``, ``ship_type``, ``destination``, ``last_updated``, and more.
 
+``AISTracker.state_at(mmsi, at)``
+   Return the effective field values of a vessel at the observation time ``at``.
+   Every field is resolved independently, so a late message can backfill old
+   fields without moving a newer position. Explicitly unavailable values are
+   present with a value of ``None`` and are listed in ``TrackState.unavailable``;
+   fields that were never part of any message are listed in ``TrackState.absent``.
+   Use ``TrackState.observations`` / ``TrackState.conflicts`` to inspect all
+   sources of values, including conflicting reports from different stations at
+   the same observation time.
+
+``AISTracker.merge(msg, ts, source=None)``
+   Import a message that may be older than the newest observation. It fills in
+   history, but never replaces a value that was observed later.
+
 ``AISTrackEvent``
    Enum with values ``CREATED``, ``UPDATED``, ``DELETED``.
    Import from ``pyais.tracker``.

@@ -574,6 +574,35 @@ But this comes with a performance penalty. In order to cleanup expired tracks an
 
 If you know that your messages in your stream are ordered after their timestamp and/or you never pass a custom timestamp to `update()`, you <mark>should set the `stream_is_ordered=True` flag when creating a new `AISTracker` instance</mark>. If this flag is set `AISTracker` internally stores the tracks in order. Thus, `cleanup()` and `n_latest_tracks()` have a complexity of `O(k)`.
 
+## Effective field history
+
+`AISTracker` also keeps a per-field history. Each message that is merged adds
+field observations together with their observation time and source. The effective
+state of a vessel can then be queried for any observation time:
+
+```py
+tracker = AISTracker(ttl_in_seconds=None, backfill=True)
+
+tracker.update(msg_new, 1_000.0, source='station-a')   # position only
+tracker.update(msg_old, 900.0, source='station-b')     # older, adds a status
+
+state = tracker.state_at(mmsi, 900.0)
+print(state['lat'], state['status'])   # values visible at the older time
+print(state.is_unavailable('status'))  # explicit "not available" vs. absent
+print(state.absent)                    # fields no message carried so far
+print(state.entries('lat'))            # ((value, source), ...)
+
+# A late message never moves a newer position:
+print(tracker.get_track(mmsi).lat)
+```
+
+A field that is absent from a message does not overwrite anything. A field that
+is explicitly encoded as "not available" is stored as unavailable (`None` in
+`state`). If two stations report conflicting valid values for the same field at
+the same observation time, both observations and their sources are kept in `state.observations`.
+
+`tracker.merge(msg, ts)` accepts older messages unconditionally; `AISTracker(backfill=True)` does the same for `update()`.
+
 ## Callbacks
 
 It is possible to register event listeners as callbacks,

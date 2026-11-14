@@ -407,6 +407,46 @@ Track vessels from a live feed
            for track in tracker.n_latest_tracks(10):
                print(track.mmsi, track.lat, track.lon)
 
+Track with out-of-order history
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A message received later may describe an earlier observation time. Such a
+message may add history, but it must not move a newer position. Merged
+messages keep every field's own observation time, so the effective state can
+be queried for any observation time.
+
+.. code-block:: python
+
+   from pyais import AISTracker
+
+   tracker = AISTracker(ttl_in_seconds=None, backfill=True)
+
+   # The newer message only carries a position.
+   tracker.update(msg_new, 1_000.0, source="station-a")
+   # The older message adds a navigation status that was not seen before.
+   tracker.update(msg_old, 900.0, source="station-b")
+
+   # The position from the newer message is still the current one.
+   track = tracker.get_track(msg_new.mmsi)
+   print(track.lat, track.lon)
+
+   # The value that was visible at the older observation time.
+   state = tracker.state_at(msg_new.mmsi, 900.0)
+   print(state["lat"], state["status"])
+
+   # Distinguish "explicitly unavailable" from "field not in this message".
+   print(state.is_unavailable("status"))
+   print(state.absent)
+
+   # Conflicting reports from two stations at the same observation time are
+   # both retained together with their sources.
+   for value, source in tracker.state_at(mmsi, at=1_000.0).entries("lat"):
+       print(value, source)
+
+``tracker.merge(msg, ts)`` is the permissive variant of ``tracker.update``.
+``AISTracker(backfill=True)`` makes ``update`` permissive as well, while the
+default preserves the previous behaviour of rejecting older messages.
+
 Track with event callbacks
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
