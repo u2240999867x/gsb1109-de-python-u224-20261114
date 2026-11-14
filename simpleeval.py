@@ -110,6 +110,7 @@ well:
 from __future__ import annotations
 
 import ast
+import collections.abc
 import operator as op
 import os
 import sys
@@ -390,6 +391,47 @@ class MultipleExpressions(UserWarning):
     """Only the first expression parsed will be used"""
 
 
+class PathLookupError(InvalidExpression):
+    """Base class for errors raised while following a ``path()``.
+
+    ``segments`` holds the full path that was attempted, ``stopped_at`` is the
+    index (0-based) of the segment that could not be followed, and ``segment``
+    is that segment's value.
+    """
+
+    def __init__(self, segments, stopped_at, message):
+        self.segments = list(segments)
+        self.stopped_at = stopped_at
+        self.segment = segments[stopped_at] if segments else None
+        super().__init__(message)
+
+
+class PathNotFound(PathLookupError):
+    """A mapped key is missing or a sequence index is out of range, so the
+    path could not be reached. The data itself is well-formed."""
+
+
+class PathTypeError(PathLookupError):
+    """A path step expected a container (mapping or sequence) but found a
+    non-container value, for instance a string. Signals corrupt data."""
+
+
+class CoalesceAllMissing(InvalidExpression):
+    """Every path given to ``coalesce()`` failed.
+
+    ``failures`` keeps the individual :class:`PathNotFound` for each
+    attempted path, including where each one stopped.
+    """
+
+    def __init__(self, failures, expression):
+        self.failures = list(failures)
+        self.expression = expression
+        positions = ", ".join(
+            f"{failure.segments!r} stopped at {failure.stopped_at}" for failure in self.failures
+        )
+        super().__init__(f"All coalesce paths failed: {positions}")
+
+
 # Sentinal used during attr access
 _ATTR_NOT_FOUND = object()
 
@@ -489,6 +531,56 @@ def safe_lshift(a, b):  # pylint: disable=invalid-name
     return a << b
 
 
+# Types that can be traversed by ``path()``. Note that ``str``/``bytes`` are
+# deliberately excluded: indexing into a string is almost always corrupt data
+# rather than a legitimate nested lookup.
+_PATH_SCALAR_TYPES = (str, bytes, bytearray)
+
+
+def follow_path(root, segments):
+    """Walk ``segments`` starting from ``root`` and return the reached value.
+
+    Explicit ``None``, empty strings and ``0`` are ordinary values and are
+    returned as-is. A missing mapping key or an out-of-range sequence index
+    raises :class:`PathNotFound`; reaching a non-container where another step
+    is expected raises :class:`PathTypeError`. Both carry the segment position
+    where traversal stopped.
+    """
+    current = root
+    for index, segment in enumerate(segments):
+        if isinstance(current, collections.abc.Mapping):
+            try:
+                current = current[segment]
+            except KeyError:
+                raise PathNotFound(segments, index, f"Missing key {segment!r}")
+            except TypeError:
+                raise PathTypeError(
+                    segments,
+                    index,
+                    f"Mapping key must be hashable, got {type(segment).__name__}",
+                )
+        elif isinstance(current, collections.abc.Sequence) and not isinstance(
+            current, _PATH_SCALAR_TYPES
+        ):
+            if not isinstance(segment, int) or isinstance(segment, bool):
+                raise PathTypeError(
+                    segments,
+                    index,
+                    f"Sequence index must be an int, got {type(segment).__name__}",
+                )
+            try:
+                current = current[segment]
+            except IndexError:
+                raise PathNotFound(segments, index, f"Index {segment} out of range")
+        else:
+            raise PathTypeError(
+                segments,
+                index,
+                f"Cannot follow {segment!r} into {type(current).__name__}",
+            )
+    return current
+
+
 ########################################
 # Defaults for the evaluator:
 
@@ -521,12 +613,21 @@ DEFAULT_OPERATORS = {
     ast.IsNot: lambda x, y: x is not y,
 }
 
+
+def _coalesce_marker(*_args, **_kwargs):
+    raise RuntimeError(
+        "coalesce() is evaluated lazily by SimpleEval and must not be invoked directly"
+    )
+
+
 DEFAULT_FUNCTIONS = {
     "rand": random,
     "randint": random_int,
     "int": int,
     "float": float,
     "str": str,
+    "path": lambda root, *segments: follow_path(root, segments),
+    "coalesce": _coalesce_marker,
 }
 
 DEFAULT_NAMES = {"True": True, "False": False, "None": None}
@@ -771,9 +872,37 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
             if func in DISALLOW_FUNCTIONS:
                 raise FeatureNotAvailable("This function is forbidden")
 
+        if func is _coalesce_marker:
+            return self._eval_coalesce(node)
+
         return func(
             *(self._eval(a) for a in node.args), **dict(self._eval(k) for k in node.keywords)
         )
+
+    def _eval_coalesce(self, node):
+        """Lazily return the first argument that resolves.
+
+        Arguments are evaluated one at a time and short-circuit on the first
+        success. Explicit falsy values (``None``, ``""``, ``0``...) are valid
+        results and stop the scan. Only a :class:`PathNotFound` (missing key or
+        out-of-range index) moves on to the next argument; a
+        :class:`PathTypeError` signals corrupt data and propagates immediately.
+        Later arguments - including expensive calls - are never evaluated once
+        an earlier one succeeds.
+        """
+        if node.keywords:
+            raise InvalidExpression("coalesce() does not accept keyword arguments")
+        if not node.args:
+            raise InvalidExpression("coalesce() requires at least one argument")
+
+        failures = []
+        for arg in node.args:
+            try:
+                return self._eval(arg)
+            except PathNotFound as error:
+                failures.append(error)
+
+        raise CoalesceAllMissing(failures, self.expr)
 
     def _eval_keyword(self, node):
         return node.arg, self._eval(node.value)

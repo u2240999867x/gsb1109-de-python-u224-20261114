@@ -314,6 +314,61 @@ exception. Eg:
 show the fall-back to functions.  Normally only put actual callables in there.)
 
 
+Path Lookup and Coalescing
+--------------------------
+
+When supplier data puts the same field in more than one place (for instance the
+receiving city in ``address.city`` or, alternatively, ``shipping.city``), the
+``path()`` and ``coalesce()`` functions let an expression pick the first path
+that reaches a value, without treating ``None``, ``""`` or ``0`` as missing.
+
+``path(root, segment, ...)`` walks mappings (with keys) and sequences (with
+integer indexes). Every reached value is returned as-is, including explicit
+``None``, empty strings and zero:
+
+.. code-block:: pycon
+
+    >>> simple_eval("path(order, 'address', 'city')",
+    ...             names={"order": {"address": {"city": None}}})
+    None
+
+Two kinds of failure are kept separate. A missing mapping key, or a sequence
+index out of range, means the path could not be reached and raises
+``PathNotFound``; reaching a non-container where another step is expected (for
+example a string where an object was supposed to be) means the data is corrupt
+and raises ``PathTypeError``. Both expose ``segments``, ``stopped_at`` (the
+0-based position of the failing segment) and ``segment``:
+
+.. code-block:: pycon
+
+    >>> simple_eval("path(order, 'address', 'city')",
+    ...             names={"order": {"address": {}}})
+    PathNotFound: Missing key 'city'   # stopped_at == 1
+
+    >>> simple_eval("path(order, 'address', 'city')",
+    ...             names={"order": {"address": "12 Main St"}})
+    PathTypeError: Cannot follow 'city' into str
+
+``coalesce()`` evaluates its arguments lazily, left to right, and returns the
+first one that succeeds. Because an explicit ``None`` is a valid result, it
+stops the scan - later arguments, including any expensive calls, are never
+evaluated. Only a ``PathNotFound`` moves on to the next argument; a
+``PathTypeError`` (corrupt data) propagates immediately:
+
+.. code-block:: pycon
+
+    >>> simple_eval(
+    ...     "coalesce(path(order, 'address', 'city'), "
+    ...     "path(order, 'shipping', 'city'))",
+    ...     names={"order": {"address": {"city": None},
+    ...                      "shipping": {"city": "Potsdam"}}})
+    None
+
+If every path fails, ``CoalesceAllMissing`` is raised, and its ``failures``
+attribute holds the individual ``PathNotFound`` errors with each path's
+stopping position.
+
+
 The two default names that are provided are ``True`` and ``False``.  So if you want to provide
 your own names, but want ``True`` and ``False`` to keep working, either provide them yourself,
 or ``.copy()`` and ``.update`` the ``DEFAULT_NAMES``. (See functions example above).
