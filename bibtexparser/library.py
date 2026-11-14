@@ -1,3 +1,6 @@
+from collections.abc import Iterable
+from collections.abc import Mapping
+
 from .model import Block
 from .model import DuplicateBlockKeyBlock
 from .model import Entry
@@ -194,6 +197,46 @@ class Library:
             #   tampered with the internals of the library).
             self.replace(block_after_add, old_block, fail_on_duplicate_key=False)
             raise ValueError("Duplicate key found.")
+
+    def rename_entries(
+        self,
+        key_mapping: Mapping[str, str],
+        extra_reference_field_keys: Iterable[str] = (),
+    ) -> None:
+        """Rename a group of entry keys atomically, updating all references.
+
+        The keys are renamed in a single step, so swaps and longer renaming
+        chains work as expected: ``{"A": "B", "B": "A"}`` exchanges the two
+        keys instead of collapsing both entries onto one key.
+
+        Every value that references a renamed entry is rewritten alongside the
+        entry keys. This always covers the ``crossref`` field of all entries,
+        plus any field listed in ``extra_reference_field_keys`` (e.g. a
+        BibLaTeX ``related`` list). Comma-separated lists (``"A, B"``) and
+        ``#``-concatenations (``"A # B"``) are both supported, with separators
+        preserved. Titles, notes, comments, ``@string`` blocks and any other
+        field that is not declared as a reference field are never modified.
+
+        The operation is atomic: if it cannot be performed, the library is not
+        changed.
+
+        :param key_mapping: Mapping of existing entry keys to their new keys.
+        :param extra_reference_field_keys: Field keys (matched
+            case-insensitively) that, in addition to ``crossref``, hold
+            citation keys and must follow renames.
+        :raises bibtexparser.exceptions.RenamingFailedError: If a source key
+            does not exist, if two sources map to the same target, or if a
+            target is already occupied by a third entry that is not part of
+            the renaming. The error identifies the offending keys and the
+            occupying entries; the library is left unchanged.
+        """
+        from .renaming import rename_entries as _rename_entries
+
+        _rename_entries(
+            library=self,
+            key_mapping=key_mapping,
+            extra_reference_field_keys=extra_reference_field_keys,
+        )
 
     @staticmethod
     def _cast_to_duplicate(prev_block_with_same_key: Entry | String, duplicate: Entry | String):

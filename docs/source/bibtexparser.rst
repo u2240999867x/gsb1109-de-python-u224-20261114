@@ -17,7 +17,8 @@ Full API
 -----------------------------------------------------------------------
 
 .. autoclass:: bibtexparser.Library
-    :members: entries, entries_dict, comments, strings, preambles, blocks, failed_blocks
+    :members: entries, entries_dict, comments, strings, preambles, blocks, failed_blocks,
+        rename_entries
 
 
 :mod:`bibtexparser.model` --- The classes used in the library

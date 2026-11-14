@@ -1,3 +1,6 @@
+from bibtexparser.model import Entry
+
+
 class ParsingException(Exception):
     """Generic Exception for parsing errors"""
 
@@ -59,3 +62,25 @@ class PartialMiddlewareException(ParsingException):
     def __init__(self, reasons: list[str]):
         reasons_string = "\n\n=====\n\n".join(reasons)
         super().__init__(f"Middleware could not be fully applied: {reasons_string}")
+
+
+class RenamingFailedError(ValueError):
+    """Raised when a grouped renaming of entry keys cannot be performed.
+
+    This happens e.g. when a source key does not exist, when two entries would
+    end up with the same key, or when a target key is already occupied by an
+    entry that is not itself part of the renaming. The library is left
+    unchanged when this error is raised.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        missing: list[str] | None = None,
+        collisions: list[tuple[str, str]] | None = None,
+        occupiers: dict[str, Entry] | None = None,
+    ):
+        super().__init__(message)
+        self.missing_keys: list[str] = missing or []
+        self.colliding_pairs: list[tuple[str, str]] = collisions or []
+        self.occupiers: dict[str, Entry] = occupiers or {}
