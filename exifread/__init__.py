@@ -8,8 +8,9 @@ from typing import Any, BinaryIO, Dict
 from exifread.core.exceptions import ExifNotFound, InvalidExif
 from exifread.core.exif_header import ExifHeader
 from exifread.core.find_exif import determine_type, get_endian_str
-from exifread.core.xmp import find_xmp_data
+from exifread.core.xmp import find_all_xmp_data, find_xmp_data
 from exifread.exif_log import get_logger
+from exifread.rights import RightsTable as RightsTable, build_rights_table
 from exifread.serialize import convert_types
 from exifread.tags import DEFAULT_STOP_TAG
 
@@ -18,7 +19,7 @@ __version__ = "3.5.1"
 logger = get_logger()
 
 
-def _extract_xmp_data(hdr: ExifHeader, fh: BinaryIO):
+def _extract_xmp_data(hdr: ExifHeader, fh: BinaryIO) -> bytes:
     # Easy we already have them
     xmp_tag = hdr.tags.get("Image ApplicationNotes")
     if xmp_tag:
@@ -29,6 +30,7 @@ def _extract_xmp_data(hdr: ExifHeader, fh: BinaryIO):
         xmp_bytes = find_xmp_data(fh)
     if xmp_bytes:
         hdr.parse_xmp(xmp_bytes)
+    return xmp_bytes
 
 
 def process_file(
@@ -41,6 +43,7 @@ def process_file(
     auto_seek=True,
     extract_thumbnail=True,
     builtin_types=False,
+    rights_table=True,
 ) -> Dict[str, Any]:
     """
     Process an image file to extract EXIF metadata.
@@ -59,6 +62,8 @@ def process_file(
     :param extract_thumbnail: If `True`, extract the JPEG thumbnail.
         The thumbnail is not always present in the EXIF metadata.
     :param builtin_types: If `True`, convert tags to standard Python types.
+    :param rights_table: If `True`, merge the EXIF copyright tag with the
+        localized XMP rights statements into an `Image RightsTable` entry.
 
     :returns: A `dict` containing the EXIF metadata.
         The keys are a string in the format `"IFD_NAME TAG_NAME"`.
@@ -133,6 +138,22 @@ def process_file(
     # parse XMP tags (experimental)
     if debug and details:
         _extract_xmp_data(hdr=hdr, fh=fh)
+
+    # merge EXIF copyright with the localized XMP rights statements.
+    # Gather every packet independently of the debug mode so that conflicts
+    # between several XMP packets are always detectable.
+    if rights_table:
+        xmp_parts = []
+        xmp_tag = hdr.tags.get("Image ApplicationNotes")
+        if xmp_tag:
+            xmp_parts.append(bytes(xmp_tag.values))
+        xmp_parts.append(find_all_xmp_data(fh))
+        table = build_rights_table(
+            exif_copyright=hdr.tags.get("Image Copyright"),
+            xmp_data=b"".join(xmp_parts),
+        )
+        if table is not None:
+            hdr.tags["Image RightsTable"] = table
 
     if builtin_types:
         return convert_types(hdr.tags)

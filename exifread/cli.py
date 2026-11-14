@@ -22,6 +22,7 @@ import timeit
 
 from exifread import __version__, exif_log, process_file
 from exifread.core.exceptions import ExifError
+from exifread.rights import RightsTable
 from exifread.tags.fields import FIELD_DEFINITIONS
 
 logger = exif_log.get_logger()
@@ -142,6 +143,15 @@ def run_cli(args: argparse.Namespace) -> None:
             try:
                 if args.builtin_types:
                     logger.info("%s (%s): %r", field, type(value).__name__, value)
+                elif isinstance(value, RightsTable):
+                    for row in value.as_table():
+                        logger.info(
+                            "%s [%s] (%s): %s",
+                            field,
+                            row["language"],
+                            row["source"],
+                            row["text"],
+                        )
                 else:
                     logger.info(
                         "%s (%s): %s",

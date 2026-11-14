@@ -36,6 +36,37 @@ def find_xmp_data(fh: BinaryIO) -> bytes:
     return xmp_bytes
 
 
+def find_all_xmp_data(fh: BinaryIO) -> bytes:
+    """
+    Search the whole file and return every XMP packet found.
+
+    Unlike :func:`find_xmp_data`, scanning does not stop at the first
+    closing tag: a file may carry several XMP packets, each with its own
+    localized statements that need to be merged.
+    """
+    fh.seek(0)
+    xmp_bytes = b""
+    logger.debug("Searching file for all XMP packets...")
+    xml_started = False
+    for line in fh:
+        open_tag = line.find(b"<x:xmpmeta")
+        close_tag = line.find(b"</x:xmpmeta>")
+        if open_tag != -1:
+            xml_started = True
+            line = line[open_tag:]
+            logger.debug("XMP found opening tag at line position %s", open_tag)
+        if close_tag != -1:
+            logger.debug("XMP found closing tag at line position %s", close_tag)
+            line_offset = open_tag if open_tag != -1 else 0
+            line = line[: (close_tag - line_offset) + 12]
+        if xml_started:
+            xmp_bytes += line
+        if close_tag != -1:
+            xml_started = False
+    logger.debug("Found %s XMP bytes in total", len(xmp_bytes))
+    return xmp_bytes
+
+
 def xmp_bytes_to_str(xmp_bytes: bytes) -> str:
     """Adobe's Extensible Metadata Platform, just dump the pretty XML."""
 

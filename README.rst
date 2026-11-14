@@ -205,6 +205,32 @@ For direct JSON serialization, combine this option with ``details=False`` to avo
         exifread.process_file(file_handle, details=False, builtin_types=True)
     )
 
+Rights Table
+============
+
+The EXIF ``Copyright`` tag and the localized rights statements carried in
+XMP packets (``dc:rights`` and ``xmpRights:UsageTerms``) are merged into an
+``Image RightsTable`` entry. Every statement keeps its language, source
+(``exif`` or ``xmp``) and original text; pass ``rights_table=False`` to
+disable the feature.
+
+``lookup()`` returns a unique statement for a language tag. The exact
+localized entry wins, then the region-less variant of the same language
+(e.g. ``en`` for ``en-GB``), then the XMP ``x-default`` entry and finally the
+EXIF copyright. When two XMP packets disagree for the same language and no
+ordering information can tell which is newer, the cell resolves to
+``"待核"`` (pending review), while every other language remains usable. The
+conflicting originals stay available in ``entries``.
+
+.. code-block:: python
+
+    tags = exifread.process_file(file_handle)
+    rights = tags["Image RightsTable"]
+    entry = rights.lookup("zh-CN")
+    print(entry.source, entry.text)
+    for row in rights.as_table():
+        print(row["language"], row["source"], row["text"])
+
 Usage Example
 =============
 

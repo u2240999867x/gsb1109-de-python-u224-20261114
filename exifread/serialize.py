@@ -2,15 +2,18 @@
 Enable conversion of Exif IfdTags to native Python types
 """
 
-from typing import Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Union
 
 from exifread.core.exif_header import IfdTag
 from exifread.exif_log import get_logger
+from exifread.rights import RightsTable
 from exifread.tags.fields import FieldType
 
 logger = get_logger()
 
-SerializedTagValue = Union[int, float, str, bytes, List[int], List[float], None]
+SerializedTagValue = Union[
+    int, float, str, bytes, List[int], List[float], Dict[str, Any], None
+]
 SerializedTagDict = Dict[str, SerializedTagValue]
 
 
@@ -28,10 +31,18 @@ def convert_types(
     output: SerializedTagDict = {}
 
     for tag_name, ifd_tag in exif_tags.items():
-        # JPEGThumbnail and TIFFThumbnail are the only values
-        # in Exif Tags dict that do not have the IfdTag type.
+        # JPEGThumbnail and TIFFThumbnail are raw bytes rather than IfdTag.
         if isinstance(ifd_tag, bytes):
             output[tag_name] = ifd_tag
+            continue
+
+        # The consolidated rights table merges EXIF copyright and XMP rights.
+        if isinstance(ifd_tag, RightsTable):
+            output[tag_name] = {
+                "entries": [entry.as_dict() for entry in ifd_tag.entries],
+                "disputed": sorted(ifd_tag.disputed),
+                "table": ifd_tag.as_table(),
+            }
             continue
 
         convert_func: Callable[[IfdTag, str], SerializedTagValue]
