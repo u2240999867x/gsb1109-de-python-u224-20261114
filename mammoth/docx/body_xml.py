@@ -7,6 +7,7 @@ from .. import results
 from .. import lists
 from .. import transforms
 from . import complex_fields
+from . import alternate_content as mce
 from .dingbats import dingbats
 from .xmlparser import node_types, XmlElement, null_xml_element
 from .styles_xml import Styles
@@ -22,7 +23,8 @@ def reader(
     relationships=None,
     styles=None,
     docx_file=None,
-    files=None
+    files=None,
+    supported_namespaces=None
 ):
 
     if styles is None:
@@ -35,6 +37,7 @@ def reader(
         styles=styles,
         docx_file=docx_file,
         files=files,
+        supported_namespaces=supported_namespaces,
     )
     return _BodyReader(read_all)
 
@@ -49,7 +52,7 @@ class _BodyReader(object):
         return results.Result(result.elements, result.messages)
 
 
-def _create_reader(numbering, content_types, relationships, styles, docx_file, files):
+def _create_reader(numbering, content_types, relationships, styles, docx_file, files, supported_namespaces=None):
     current_instr_text = []
     complex_field_stack = []
 
@@ -637,7 +640,8 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         return _success(documents.comment_reference(element.attributes["w:id"]))
 
     def alternate_content(element):
-        return read_child_elements(element.find_child_or_null("mc:Fallback"))
+        branch = mce.read(element, supported_namespaces)
+        return _read_xml_elements(branch.children)
 
     def read_sdt(element):
         content_result = read_child_elements(element.find_child_or_null("w:sdtContent"))

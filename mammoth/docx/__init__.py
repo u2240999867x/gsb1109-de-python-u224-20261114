@@ -19,14 +19,21 @@ from ..zips import open_zip
 _empty_result = results.success([])
 
 
-def read(fileobj, external_file_access=False):
+def read(fileobj, external_file_access=False, supported_namespaces=None, alternate_content_sources=None):
     zip_file = open_zip(fileobj, "r")
-    part_paths = _find_part_paths(zip_file)
+
+    part_paths = _find_part_paths(
+        zip_file,
+        supported_namespaces=supported_namespaces,
+        alternate_content_sources=alternate_content_sources,
+    )
     read_part_with_body = _part_with_body_reader(
         getattr(fileobj, "name", None),
         zip_file,
         part_paths=part_paths,
         external_file_access=external_file_access,
+        supported_namespaces=supported_namespaces,
+        alternate_content_sources=alternate_content_sources,
     )
 
     return results.combine([
@@ -47,13 +54,20 @@ class _PartPaths(object):
     styles = cobble.field()
 
 
-def _find_part_paths(zip_file):
-    package_relationships = _read_relationships(zip_file, "_rels/.rels")
+def _find_part_paths(zip_file, supported_namespaces=None, alternate_content_sources=None):
+    package_relationships = _read_relationships(
+        zip_file,
+        "_rels/.rels",
+        supported_namespaces=supported_namespaces,
+        alternate_content_sources=alternate_content_sources,
+    )
     document_filename = _find_document_filename(zip_file, package_relationships)
 
     document_relationships = _read_relationships(
         zip_file,
         _find_relationships_path_for(document_filename),
+        supported_namespaces=supported_namespaces,
+        alternate_content_sources=alternate_content_sources,
     )
 
     def find(name):
@@ -135,26 +149,41 @@ def _read_document(zip_file, read_part_with_body, notes, comments, part_paths):
     )
 
 
-def _part_with_body_reader(document_path, zip_file, part_paths, external_file_access):
+def _part_with_body_reader(document_path, zip_file, part_paths, external_file_access, supported_namespaces=None, alternate_content_sources=None):
+    def read_content_types(element):
+        return read_content_types_xml_element(element)
+
+    def read_styles(element):
+        return read_styles_xml_element(element)
+
+    def read_numbering(element):
+        return read_numbering_xml_element(element, styles=styles)
+
     content_types = _try_read_entry_or_default(
         zip_file,
         "[Content_Types].xml",
-        read_content_types_xml_element,
-        empty_content_types,
+        read_content_types,
+        default=empty_content_types,
+        supported_namespaces=supported_namespaces,
+        alternate_content_sources=alternate_content_sources,
     )
 
     styles = _try_read_entry_or_default(
         zip_file,
         part_paths.styles,
-        read_styles_xml_element,
-        Styles.EMPTY,
+        read_styles,
+        default=Styles.EMPTY,
+        supported_namespaces=supported_namespaces,
+        alternate_content_sources=alternate_content_sources,
     )
 
     numbering = _try_read_entry_or_default(
         zip_file,
         part_paths.numbering,
-        lambda element: read_numbering_xml_element(element, styles=styles),
+        read_numbering,
         default=Numbering.EMPTY,
+        supported_namespaces=supported_namespaces,
+        alternate_content_sources=alternate_content_sources,
     )
 
     files = Files(
@@ -163,7 +192,12 @@ def _part_with_body_reader(document_path, zip_file, part_paths, external_file_ac
     )
 
     def read_part(name, reader, default=_undefined):
-        relationships = _read_relationships(zip_file, _find_relationships_path_for(name))
+        relationships = _read_relationships(
+            zip_file,
+            _find_relationships_path_for(name),
+            supported_namespaces=supported_namespaces,
+            alternate_content_sources=alternate_content_sources,
+        )
 
         body_reader = body_xml.reader(
             numbering=numbering,
@@ -172,12 +206,31 @@ def _part_with_body_reader(document_path, zip_file, part_paths, external_file_ac
             styles=styles,
             docx_file=zip_file,
             files=files,
+            supported_namespaces=supported_namespaces,
+        )
+
+        read_entry = partial(
+            reader,
+            body_reader=body_reader,
         )
 
         if default is _undefined:
-            return _read_entry(zip_file, name, partial(reader, body_reader=body_reader))
+            return _read_entry(
+                zip_file,
+                name,
+                read_entry,
+                supported_namespaces=supported_namespaces,
+                alternate_content_sources=alternate_content_sources,
+            )
         else:
-            return _try_read_entry_or_default(zip_file, name, partial(reader, body_reader=body_reader), default=default)
+            return _try_read_entry_or_default(
+                zip_file,
+                name,
+                read_entry,
+                default=default,
+                supported_namespaces=supported_namespaces,
+                alternate_content_sources=alternate_content_sources,
+            )
 
     return read_part
 
@@ -188,24 +241,36 @@ def _find_relationships_path_for(name):
     return zips.join_path(dirname, "_rels", basename + ".rels")
 
 
-def _read_relationships(zip_file, name):
+def _read_relationships(zip_file, name, supported_namespaces=None, alternate_content_sources=None):
     return _try_read_entry_or_default(
         zip_file,
         name,
         read_relationships_xml_element,
         default=Relationships.EMPTY,
+        supported_namespaces=supported_namespaces,
+        alternate_content_sources=alternate_content_sources,
     )
 
-def _try_read_entry_or_default(zip_file, name, reader, default):
+def _try_read_entry_or_default(zip_file, name, reader, default, supported_namespaces=None, alternate_content_sources=None):
     if zip_file.exists(name):
-        return _read_entry(zip_file, name, reader)
+        return _read_entry(
+            zip_file,
+            name,
+            reader,
+            supported_namespaces=supported_namespaces,
+            alternate_content_sources=alternate_content_sources,
+        )
     else:
         return default
 
 
-def _read_entry(zip_file, name, reader):
+def _read_entry(zip_file, name, reader, supported_namespaces=None, alternate_content_sources=None):
     with zip_file.open(name) as fileobj:
-        return reader(office_xml.read(fileobj))
+        return reader(office_xml.read(
+            fileobj,
+            supported_namespaces=supported_namespaces,
+            alternate_content_sources=alternate_content_sources,
+        ))
 
 
 _undefined = object()

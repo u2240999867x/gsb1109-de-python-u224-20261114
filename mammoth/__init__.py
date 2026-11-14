@@ -22,6 +22,7 @@ def convert(
     id_prefix=None,
     include_embedded_style_map=_undefined,
     external_file_access=_undefined,
+    supported_namespaces=None,
     **kwargs
 ):
     if include_embedded_style_map is _undefined:
@@ -37,7 +38,11 @@ def convert(
         external_file_access = False
 
     return options.read_options(kwargs).bind(lambda convert_options:
-        docx.read(fileobj, external_file_access=external_file_access).map(transform_document).bind(lambda document:
+        docx.read(
+            fileobj,
+            external_file_access=external_file_access,
+            supported_namespaces=supported_namespaces,
+        ).map(transform_document).bind(lambda document:
             conversion.convert_document_element_to_html(
                 document,
                 id_prefix=id_prefix,
@@ -47,8 +52,11 @@ def convert(
     )
 
 
-def extract_raw_text(fileobj):
-    return docx.read(fileobj).map(extract_raw_text_from_element)
+def extract_raw_text(fileobj, supported_namespaces=None):
+    return docx.read(
+        fileobj,
+        supported_namespaces=supported_namespaces,
+    ).map(extract_raw_text_from_element)
 
 
 def embed_style_map(fileobj, style_map):

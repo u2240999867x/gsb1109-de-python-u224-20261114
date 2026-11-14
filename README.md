@@ -113,6 +113,19 @@ For instance:
 
     mammoth document.docx --output-format=markdown
 
+#### Alternate content
+
+`mc:AlternateContent` can contain several `mc:Choice` branches and a `mc:Fallback`.
+By default, `mc:Fallback` is used.
+To use a `mc:Choice` instead, declare the namespaces it requires as supported,
+either by URI or by prefix:
+
+    mammoth document.docx --supported-namespace=wps
+    mammoth document.docx --supported-namespace=http://schemas.microsoft.com/office/word/2010/wordprocessingShape
+
+The flag can be repeated.
+The first `mc:Choice` whose required namespaces are all supported is used.
+
 ### Library
 
 **Mammoth performs no sanitisation of the source document,
@@ -295,6 +308,18 @@ Converts the source document to HTML.
   To enable access when converting trusted source documents,
   pass `external_file_access=True`.
 
+* `supported_namespaces`: namespaces understood when reading `mc:AlternateContent`.
+  Accepts a list of namespace URIs, a list of prefixes, or a list of `(prefix, uri)` pairs.
+  When a `mc:Choice` has a `Requires` list whose prefixes all resolve to supported namespaces,
+  its contents are read. Prefixes are resolved using the declarations in scope at the
+  `mc:Choice` element, so a prefix rebound on that element is interpreted using the local
+  declaration. The first satisfying `mc:Choice` in document order is used. If no `mc:Choice`
+  is supported, `mc:Fallback` is read. If neither is available, no content is read for that
+  `mc:AlternateContent`.
+  The lower-level `mammoth.docx.read` function accepts `alternate_content_sources`,
+  a list that receives one branch record per `mc:AlternateContent`, with `source` set to
+  `"mc:Choice"` or `"mc:Fallback"` so branch provenance can be inspected.
+
 * `convert_image`: by default, images are converted to `<img>` elements with the source included inline in the `src` attribute.
   Set this argument to an [image converter](#image-converters) to override the default behaviour.
 
@@ -327,7 +352,7 @@ Converts the source document to Markdown.
 This behaves the same as `convert_to_html`,
 except that the `value` property of the result contains Markdown rather than HTML.
 
-#### `mammoth.extract_raw_text(fileobj)`
+#### `mammoth.extract_raw_text(fileobj, supported_namespaces=None)`
 
 Extract the raw text of the document.
 This will ignore all formatting in the document.
@@ -335,6 +360,9 @@ Each paragraph is followed by two newlines.
 
 * `fileobj`: a file-like object containing the source document.
   Files should be opened in binary mode.
+
+* `supported_namespaces`: namespaces understood when reading `mc:AlternateContent`,
+  using the same forms as `mammoth.convert_to_html`.
 
 * Returns a result with the following properties:
 

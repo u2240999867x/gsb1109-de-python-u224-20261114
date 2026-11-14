@@ -1,3 +1,12 @@
+# 1.14.0
+
+* Read `mc:Choice` children of `mc:AlternateContent` when the namespaces required by
+  the choice are declared as supported. If several choices are supported, the first
+  choice in document order is used. If no choice is supported, `mc:Fallback` is used.
+  Namespace prefixes are resolved using the declarations in scope where the choice
+  appears. If neither a supported choice nor a fallback is available, the
+  `mc:AlternateContent` is ignored.
+
 # 1.13.0
 
 * Read the children of w:customXml elements.

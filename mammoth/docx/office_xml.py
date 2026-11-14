@@ -1,4 +1,5 @@
 from ..lists import flat_map
+from . import alternate_content
 from .xmlparser import parse_xml, XmlElement
 
 
@@ -30,16 +31,38 @@ _namespaces = [
 ]
 
 
-def read(fileobj):
-    return _collapse_alternate_content(parse_xml(fileobj, _namespaces))[0]
+def read(fileobj, supported_namespaces=None, alternate_content_sources=None):
+    return _collapse_alternate_content(
+        parse_xml(fileobj, _namespaces),
+        supported_namespaces,
+        alternate_content_sources,
+    )[0]
 
 
-def _collapse_alternate_content(node):
+def _collapse_alternate_content(node, supported_namespaces, alternate_content_sources=None):
     if isinstance(node, XmlElement):
         if node.name == "mc:AlternateContent":
-            return node.find_child_or_null("mc:Fallback").children
+            branch = alternate_content.read(node, supported_namespaces)
+            if alternate_content_sources is not None:
+                alternate_content_sources.append(branch)
+
+            return flat_map(
+                lambda child: _collapse_alternate_content(
+                    child,
+                    supported_namespaces,
+                    alternate_content_sources,
+                ),
+                branch.children,
+            )
         else:
-            node.children = flat_map(_collapse_alternate_content, node.children)
+            node.children = flat_map(
+                lambda child: _collapse_alternate_content(
+                    child,
+                    supported_namespaces,
+                    alternate_content_sources,
+                ),
+                node.children,
+            )
             return [node]
     else:
         return [node]

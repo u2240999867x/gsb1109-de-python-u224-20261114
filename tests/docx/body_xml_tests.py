@@ -1750,6 +1750,83 @@ class AlternateContentTests(object):
         assert_equal([], result)
 
 
+    def test_when_no_choice_is_available_and_no_fallback_then_no_text_is_duplicated(self):
+        element = xml_element("mc:AlternateContent", {}, [
+            xml_element("mc:Choice", {"Requires": "wps"}, [
+                _paragraph_with_style_id("first")
+            ]),
+            xml_element("mc:Choice", {"Requires": "wpg"}, [
+                _paragraph_with_style_id("second")
+            ]),
+        ])
+        result = _read_and_get_document_xml_elements(
+            element,
+            supported_namespaces=[],
+        )
+        assert_equal([], result)
+
+
+    def test_when_choice_is_supported_then_choice_is_read(self):
+        element = _alternate_content_with_namespaces(
+            xml_element("mc:Choice", {"Requires": "wps"}, [
+                _paragraph_with_style_id("first")
+            ]),
+            xml_element("mc:Fallback", {}, [
+                _paragraph_with_style_id("second")
+            ]),
+        )
+
+        result = _read_and_get_document_xml_element(
+            element,
+            supported_namespaces=["wps"],
+        )
+        assert_equal("first", result.style_id)
+
+
+    def test_when_two_choices_are_supported_then_first_choice_is_read(self):
+        element = _alternate_content_with_namespaces(
+            xml_element("mc:Choice", {"Requires": "wps"}, [
+                _paragraph_with_style_id("first")
+            ]),
+            xml_element("mc:Choice", {"Requires": "wpg"}, [
+                _paragraph_with_style_id("second")
+            ]),
+            xml_element("mc:Fallback", {}, [
+                _paragraph_with_style_id("fallback")
+            ]),
+        )
+
+        result = _read_and_get_document_xml_element(
+            element,
+            supported_namespaces=["wps", "wpg"],
+        )
+        assert_equal("first", result.style_id)
+
+
+    def test_when_choice_prefix_is_rebound_then_local_namespace_is_used(self):
+        element = _alternate_content_with_namespaces(
+            xml_element("mc:Choice", {"Requires": "wps"}, [
+                _paragraph_with_style_id("first")
+            ]),
+            xml_element("mc:Fallback", {}, [
+                _paragraph_with_style_id("second")
+            ]),
+        )
+        element.children[0].namespaces = {"wps": "urn:supported"}
+
+        result = _read_and_get_document_xml_element(
+            element,
+            supported_namespaces=["urn:supported"],
+        )
+        assert_equal("first", result.style_id)
+
+
+def _alternate_content_with_namespaces(*children):
+    element = xml_element("mc:AlternateContent", {}, list(children))
+    element.namespaces = {}
+    return element
+
+
 def test_sdt_is_read_using_sdt_content():
     element = xml_element("w:sdt", {}, [
         xml_element("w:sdtContent", {}, [

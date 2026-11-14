@@ -31,6 +31,7 @@ def main():
             style_map=style_map,
             convert_image=convert_image,
             output_format=args.output_format,
+            supported_namespaces=args.supported_namespaces,
         )
         for message in result.messages:
             sys.stderr.write(message.message)
@@ -96,6 +97,12 @@ def _parse_args():
         "--style-map",
         required=False,
         help="File containg a style map.")
+    parser.add_argument(
+        "--supported-namespace",
+        dest="supported_namespaces",
+        action="append",
+        default=None,
+        help="Namespace prefix or URI declared as supported when selecting mc:Choice.")
     return parser.parse_args()
 
 
