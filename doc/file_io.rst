@@ -41,6 +41,16 @@ SqliteWriter
     :show-inheritance:
     :members:
 
+.. autoclass:: can.SqliteMigrator
+    :show-inheritance:
+    :members:
+
+.. autoclass:: can.MigrationProgress
+    :show-inheritance:
+    :members:
+
+.. autofunction:: can.migrate_sqlite
+
 
 Database table format
 ~~~~~~~~~~~~~~~~~~~~~
@@ -60,7 +70,49 @@ remote          INTEGER         ``1`` if the message is a remote frame, else ``0
 error           INTEGER         ``1`` if the message is an error frame, else ``0``
 dlc             INTEGER         The data length code (DLC)
 data            BLOB            The content of the message
+channel                         The channel of the message, or ``NULL`` if unknown
+is_fd           INTEGER         ``1``/``0`` for an explicit CAN FD/classic frame,
+                                ``NULL`` if the source database did not record it
+bitrate_switch  INTEGER         CAN FD bit-rate switch, ``NULL`` if not recorded
+error_state_indicator INTEGER   CAN FD error state indicator, ``NULL`` if not recorded
+source_db                       The original database number/name after migration
+source_row      INTEGER         The original SQLite ``rowid`` after migration
 ==============  ==============  ==============
+
+Databases created by older *python-can* versions have only the first seven
+columns. They remain readable without conversion and can be upgraded in
+place by :class:`~can.SqliteWriter`. For such legacy rows the reader returns
+``channel=None`` and ``is_fd=None`` (also ``None`` for the two related CAN FD
+flags). An explicit classic frame written by the current writer has
+``is_fd=False``, so unknown legacy rows can be distinguished from confirmed
+classic frames.
+
+Migrating in batches
+~~~~~~~~~~~~~~~~~~~~
+
+An archive can be migrated without copying all rows at once::
+
+    from can import SqliteMigrator
+
+    migrator = SqliteMigrator("archive.db", "migrated.db", batch_size=100)
+    while not migrator.step().done:
+        pass
+
+Progress is committed atomically with each batch. If the process is stopped,
+a new :class:`~can.SqliteMigrator` with the same arguments resumes from the
+last committed batch; already migrated rows are not duplicated. The source
+rows are read and inserted in ``rowid`` order, preserving the relative order
+of existing rows and duplicate frames.
+
+After migration, rows copied from a source database carry ``source_db`` and
+``source_row``. The original sample can be retrieved even after new messages
+have been appended::
+
+    with can.SqliteReader("migrated.db") as reader:
+        sample = list(reader.find(source_db="archive.db", source_row=42))
+
+The command line equivalent is ``can_sqlite_migrate``. Pass ``--source-db``
+when the archive's database number differs from its file path.
 
 
 ASC (.asc Logging format)

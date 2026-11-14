@@ -20,8 +20,10 @@ __all__ = [
     "MF4Reader",
     "MF4Writer",
     "MessageSync",
+    "MigrationProgress",
     "Printer",
     "SizedRotatingLogger",
+    "SqliteMigrator",
     "SqliteReader",
     "SqliteWriter",
     "TRCFileVersion",
@@ -34,6 +36,7 @@ __all__ = [
     "generic",
     "logger",
     "mf4",
+    "migrate_sqlite",
     "player",
     "printer",
     "sqlite",
@@ -53,5 +56,11 @@ from .canutils import CanutilsLogReader, CanutilsLogWriter
 from .csv import CSVReader, CSVWriter
 from .mf4 import MF4Reader, MF4Writer
 from .printer import Printer
-from .sqlite import SqliteReader, SqliteWriter
+from .sqlite import (
+    MigrationProgress,
+    SqliteMigrator,
+    SqliteReader,
+    SqliteWriter,
+    migrate_sqlite,
+)
 from .trc import TRCFileVersion, TRCReader, TRCWriter

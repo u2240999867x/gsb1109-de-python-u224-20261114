@@ -1,0 +1,6 @@
+SQLite logs written before channel and CAN FD support are readable without
+conversion and are upgraded in place by ``SqliteWriter``. Unrecorded flags
+remain ``None``, while explicit classic frames stay ``False``. Add
+``SqliteMigrator`` and ``can_sqlite_migrate`` for resumable batch migration
+with original database/row provenance and preserve row order and duplicate
+frames.
