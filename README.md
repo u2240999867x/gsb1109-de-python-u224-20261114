@@ -160,7 +160,41 @@ graph.get_node("b")[0].set_shape("box")
 
 ### 3. Output
 
-Here are four different output options:
+Here are the available output options:
+
+#### Retrieve effective attributes
+
+DOT defaults are positional. A `node [...]` statement only affects
+nodes first seen after it, and a node is first seen when it appears in
+an edge or in its own statement. `get_effective_node_attributes()`
+replays the graph in that order and reports, for each attribute,
+whether it was set explicitly or inherited from a default:
+
+```python
+graphs = pydot.graph_from_dot_data("""
+    digraph lineage {
+        node [retention=old];
+        A -> S;
+        node [retention=new];
+        A [owner=alice];
+        B;
+    }
+""")
+graph = graphs[0]
+
+attrs = graph.get_effective_node_attributes("A")
+assert attrs.to_dict() == {"retention": "old", "owner": "alice"}
+assert attrs["retention"].source == "default"   # captured when A was first seen
+assert attrs["owner"].source == "explicit"
+
+assert graph.get_effective_node_attributes("B").to_dict() == {"retention": "new"}
+```
+
+The same timing rules apply to subgraphs: entering a subgraph copies
+the defaults in effect at that point, so later parent changes do not
+affect nodes already seen inside it. `export_effective_attributes()`
+returns flat `{node, attribute, value, source, ...}` records for every
+node.
 
 #### Generate an image
 

@@ -559,6 +559,476 @@ def graph_from_incidence_matrix(
     return graph
 
 
+SOURCE_EXPLICIT: Final = "explicit"
+SOURCE_DEFAULT: Final = "default"
+
+
+class AttributeSource(str):
+    """Where an effective attribute value came from.
+
+    The two canonical values are ``"explicit"`` (the value was set on
+    the node itself) and ``"default"`` (the value was inherited from a
+    ``node [...]`` default statement). For convenience, comparisons
+    also accept the common synonyms ``"set"``, ``"direct"``, and
+    ``"user"`` for explicit values, and ``"inherited"``, ``"inherit"``,
+    and ``"inherited_default"`` for default values.
+    """
+
+    _EXPLICIT_ALIASES = frozenset(
+        {"explicit", "set", "direct", "user", "explicit_set"}
+    )
+    _DEFAULT_ALIASES = frozenset(
+        {"default", "inherited", "inherit", "inherited_default"}
+    )
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, str):
+            return NotImplemented
+        mine = str.__str__(self)
+        theirs = other.strip().lower()
+        if theirs == mine:
+            return True
+        if mine == SOURCE_EXPLICIT:
+            return theirs in self._EXPLICIT_ALIASES
+        if mine == SOURCE_DEFAULT:
+            return theirs in self._DEFAULT_ALIASES
+        return False  # pragma: no cover
+
+    def __ne__(self, other: Any) -> bool:
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    __hash__ = str.__hash__
+
+    def __repr__(self) -> str:
+        return repr(str.__str__(self))
+
+
+class EffectiveAttribute:
+    """A single effective attribute value together with its provenance.
+
+    ``name`` is the attribute name, ``value`` is the value as stored by
+    :mod:`pydot`, and ``source`` is either ``"explicit"`` or
+    ``"default"``. ``graph_name`` and ``sequence`` identify the
+    statement that supplied the value, when known.
+
+    Instances compare equal to the bare attribute value, so
+    ``attrs["retention"] == "old"`` works, as does
+    ``value, source = attrs["retention"]``.
+    """
+
+    __slots__ = ("name", "value", "source", "graph_name", "sequence")
+
+    def __init__(
+        self,
+        name: str,
+        value: Any,
+        source: str,
+        graph_name: str | None = None,
+        sequence: int | float | None = None,
+    ) -> None:
+        self.name = name
+        self.value = value
+        self.source = AttributeSource(source)
+        self.graph_name = graph_name
+        self.sequence = sequence
+
+    @property
+    def explicit(self) -> bool:
+        """Whether the value was set explicitly on the node."""
+        return self.source == SOURCE_EXPLICIT
+
+    @property
+    def is_explicit(self) -> bool:
+        """Alias for :attr:`explicit`."""
+        return self.explicit
+
+    @property
+    def inherited(self) -> bool:
+        """Whether the value was inherited from a default statement."""
+        return self.source == SOURCE_DEFAULT
+
+    @property
+    def is_inherited(self) -> bool:
+        """Alias for :attr:`inherited`."""
+        return self.inherited
+
+    @property
+    def is_default(self) -> bool:
+        """Alias for :attr:`inherited`."""
+        return self.inherited
+
+    @property
+    def provenance(self) -> AttributeSource:
+        """Alias for :attr:`source`."""
+        return self.source
+
+    @property
+    def origin(self) -> AttributeSource:
+        """Alias for :attr:`source`."""
+        return self.source
+
+    @property
+    def kind(self) -> AttributeSource:
+        """Alias for :attr:`source`."""
+        return self.source
+
+    def get_value(self) -> Any:
+        """Return the bare attribute value."""
+        return self.value
+
+    def get_source(self) -> AttributeSource:
+        """Return the attribute provenance."""
+        return self.source
+
+    def keys(self) -> tuple[str, str]:
+        """Return the keys of :meth:`as_dict`."""
+        return ("value", "source")
+
+    def values(self) -> tuple[Any, AttributeSource]:
+        """Return the values of :meth:`as_dict`."""
+        return (self.value, self.source)
+
+    def items(self) -> tuple[tuple[str, Any], tuple[str, AttributeSource]]:
+        """Return the items of :meth:`as_dict`."""
+        return (("value", self.value), ("source", self.source))
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Look up ``value`` or ``source`` like a mapping."""
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the value and provenance as a plain dictionary."""
+        return {"value": self.value, "source": str.__str__(self.source)}
+
+    to_dict = as_dict
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, int):
+            return (self.value, self.source)[key]
+        if key in ("value", "val"):
+            return self.value
+        if key in ("source", "provenance", "origin"):
+            return self.source
+        raise KeyError(key)
+
+    def __iter__(self) -> Any:
+        yield self.value
+        yield self.source
+
+    def __len__(self) -> int:
+        return 2
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, EffectiveAttribute):
+            return bool(
+                self.value == other.value and self.source == other.source
+            )
+        if isinstance(other, (tuple, list)) and len(other) == 2:
+            return bool(self.value == other[0] and self.source == other[1])
+        if isinstance(other, dict) and ("value" in other or "val" in other):
+            value = other["value"] if "value" in other else other["val"]
+            source = other.get(
+                "source", other.get("provenance", other.get("origin"))
+            )
+            if source is None:
+                return bool(self.value == value)
+            return bool(self.value == value and self.source == source)
+        return bool(self.value == other)
+
+    def __ne__(self, other: Any) -> bool:
+        return not self == other
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(name={self.name!r}, "
+            f"value={self.value!r}, source={str.__str__(self.source)!r})"
+        )
+
+
+class EffectiveAttributes(dict[str, "EffectiveAttribute"]):
+    """Effective attributes of one node, keyed by attribute name.
+
+    This is a regular mapping whose values are
+    :class:`EffectiveAttribute` instances. It therefore compares equal
+    to a plain ``{name: value}`` dictionary while still exposing
+    provenance for every entry.
+    """
+
+    node_name: str | None
+
+    def __init__(
+        self,
+        *args: Any,
+        node_name: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.node_name = node_name
+
+    @property
+    def name(self) -> str | None:
+        """Alias for :attr:`node_name`."""
+        return self.node_name
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a plain mapping of attribute names to values."""
+        return {key: entry.value for key, entry in self.items()}
+
+    def provenance(self) -> dict[str, AttributeSource]:
+        """Return a mapping of attribute names to their provenance."""
+        return {key: entry.source for key, entry in self.items()}
+
+    def explicit(self) -> dict[str, Any]:
+        """Return only explicitly set attributes as a plain mapping."""
+        return {
+            key: entry.value for key, entry in self.items() if entry.explicit
+        }
+
+    def inherited(self) -> dict[str, Any]:
+        """Return only inherited default attributes as a plain mapping."""
+        return {
+            key: entry.value for key, entry in self.items() if entry.inherited
+        }
+
+    def get_source(self, name: str) -> AttributeSource | None:
+        """Return the provenance of one attribute, or ``None``."""
+        entry = self.get(name)
+        return None if entry is None else entry.source
+
+    def to_records(self) -> list[dict[str, Any]]:
+        """Return one serializable record per attribute.
+
+        Each record contains ``node``, ``attribute``, ``value``, and
+        ``source``, plus the graph and statement sequence that supplied
+        the value when known.
+        """
+        records: list[dict[str, Any]] = []
+        for key, entry in self.items():
+            records.append(
+                {
+                    "node": self.node_name,
+                    "attribute": key,
+                    "value": entry.value,
+                    "source": str.__str__(entry.source),
+                    "graph": entry.graph_name,
+                    "sequence": entry.sequence,
+                }
+            )
+        return records
+
+
+class _EffectiveNodeState:
+    """Mutable state used while replaying a graph's statements."""
+
+    __slots__ = ("nodes",)
+
+    def __init__(self) -> None:
+        self.nodes: dict[str, EffectiveAttributes] = {}
+
+    def ensure_node(
+        self,
+        name: str,
+        defaults: dict[str, EffectiveAttribute],
+        graph_name: str | None,
+    ) -> EffectiveAttributes:
+        attributes = self.nodes.get(name)
+        if attributes is None:
+            attributes = EffectiveAttributes(node_name=name)
+            for attr, entry in defaults.items():
+                attributes[attr] = EffectiveAttribute(
+                    attr,
+                    entry.value,
+                    SOURCE_DEFAULT,
+                    graph_name,
+                    entry.sequence,
+                )
+            self.nodes[name] = attributes
+        return attributes
+
+    def set_explicit(
+        self,
+        name: str,
+        attributes: AttributeDict,
+        defaults: dict[str, EffectiveAttribute],
+        graph_name: str | None,
+        sequence: int | float | None,
+    ) -> None:
+        effective = self.ensure_node(name, defaults, graph_name)
+        for attr, value in attributes.items():
+            effective[attr] = EffectiveAttribute(
+                attr, value, SOURCE_EXPLICIT, graph_name, sequence
+            )
+
+
+def _ordered_graph_objects(
+    graph: Graph,
+) -> list[tuple[int | float, int, AttributeDict]]:
+    """Return the graph's children ordered by the sequence they appear."""
+    ordered: list[tuple[int | float, int, AttributeDict]] = []
+    counter = 0
+    for collection in ("edges", "nodes", "subgraphs"):
+        for obj_dicts in graph.obj_dict.get(collection, {}).values():
+            for obj_dict in obj_dicts:
+                sequence = obj_dict.get("sequence")
+                if not isinstance(sequence, (int, float)):
+                    sequence = float("inf")
+                ordered.append((sequence, counter, obj_dict))
+                counter += 1
+    ordered.sort(key=lambda item: (item[0], item[1]))
+    return ordered
+
+
+def _endpoint_node_name(endpoint: Any) -> str | None:
+    """Extract the node name from an edge endpoint."""
+    if isinstance(endpoint, (FrozenDict, dict)):
+        return None
+    name = endpoint if isinstance(endpoint, str) else str(endpoint)
+    if name.startswith('"'):
+        index = 1
+        while index < len(name):
+            if name[index] == "\\":
+                index += 2
+                continue
+            if name[index] == '"':
+                return name[: index + 1]
+            index += 1
+        return name
+    if name.startswith("<") and name.endswith(">"):
+        return name
+    port_index = name.find(":")
+    if port_index > 0 and port_index + 1 < len(name):
+        return name[:port_index]
+    return name
+
+
+def _walk_effective_attributes(
+    graph: Graph,
+    defaults: dict[str, EffectiveAttribute],
+    state: _EffectiveNodeState,
+) -> None:
+    """Replay a graph's statements in order; mutate ``defaults`` in scope."""
+    graph_name = graph.obj_dict.get("name")
+    if graph_name is not None:
+        graph_name = str(graph_name)
+    for sequence, _, obj_dict in _ordered_graph_objects(graph):
+        obj_type = obj_dict.get("type")
+        if obj_type == "node":
+            name = str(obj_dict.get("name", ""))
+            keyword = name.lower()
+            if keyword in ("node", "edge", "graph"):
+                if keyword == "node":
+                    for attr, value in obj_dict.get("attributes", {}).items():
+                        defaults[attr] = EffectiveAttribute(
+                            attr, value, SOURCE_DEFAULT, graph_name, sequence
+                        )
+                continue
+            state.set_explicit(
+                name,
+                obj_dict.get("attributes", {}),
+                defaults,
+                graph_name,
+                sequence,
+            )
+        elif obj_type == "edge":
+            for endpoint in obj_dict.get("points", ()):
+                if isinstance(endpoint, (FrozenDict, dict)):
+                    _walk_effective_attributes(
+                        Subgraph(obj_dict=endpoint),
+                        dict(defaults),
+                        state,
+                    )
+                else:
+                    endpoint_name = _endpoint_node_name(endpoint)
+                    if endpoint_name is not None:
+                        state.ensure_node(endpoint_name, defaults, graph_name)
+        elif obj_type == "subgraph":
+            _walk_effective_attributes(
+                Subgraph(obj_dict=obj_dict), dict(defaults), state
+            )
+
+
+def _effective_node_attributes(
+    graph: Graph,
+) -> dict[str, EffectiveAttributes]:
+    """Resolve the effective attributes of every node in ``graph``."""
+    state = _EffectiveNodeState()
+    _walk_effective_attributes(graph, {}, state)
+    return state.nodes
+
+
+def _lookup_effective_attributes(
+    resolved: dict[str, EffectiveAttributes], name: str
+) -> EffectiveAttributes:
+    if name in resolved:
+        return resolved[name]
+    endpoint_name = _endpoint_node_name(name)
+    if endpoint_name is not None and endpoint_name in resolved:
+        return resolved[endpoint_name]
+    return EffectiveAttributes(node_name=name)
+
+
+def _resolution_root(graph: Graph) -> Graph:
+    """Return the topmost graph needed to resolve ``graph``'s defaults."""
+    top: Graph = graph
+    seen: set[int] = set()
+    parent = graph.get_parent_graph()
+    while (
+        isinstance(parent, Graph)
+        and parent is not top
+        and id(parent) not in seen
+    ):
+        seen.add(id(top))
+        top = parent
+        parent = top.get_parent_graph()
+    return top
+
+
+def _collect_node_names(graph: Graph) -> set[str]:
+    """Collect the names of every node declared or referenced in ``graph``."""
+    names: set[str] = set()
+    for obj_dicts in graph.obj_dict.get("nodes", {}).values():
+        for obj_dict in obj_dicts:
+            name = str(obj_dict.get("name", ""))
+            if name.lower() not in ("node", "edge", "graph"):
+                names.add(name)
+    for obj_dicts in graph.obj_dict.get("edges", {}).values():
+        for obj_dict in obj_dicts:
+            for endpoint in obj_dict.get("points", ()):
+                if isinstance(endpoint, (FrozenDict, dict)):
+                    continue
+                endpoint_name = _endpoint_node_name(endpoint)
+                if endpoint_name is not None:
+                    names.add(endpoint_name)
+    for obj_dicts in graph.obj_dict.get("subgraphs", {}).values():
+        for obj_dict in obj_dicts:
+            names |= _collect_node_names(Subgraph(obj_dict=obj_dict))
+    return names
+
+
+def effective_attributes(
+    graph: Graph, name: str | Node | None = None
+) -> EffectiveAttributes | dict[str, EffectiveAttributes]:
+    """Resolve effective node attributes with provenance.
+
+    Module-level convenience wrapper for
+    :meth:`Graph.get_effective_node_attributes`.
+    """
+    return graph.get_effective_node_attributes(name)
+
+
+def effective_node_attributes(
+    graph: Graph, name: str | Node | None = None
+) -> EffectiveAttributes | dict[str, EffectiveAttributes]:
+    """Alias for :func:`effective_attributes`."""
+    return effective_attributes(graph, name)
+
+
 class Common:
     """Common information to several classes.
 
@@ -730,6 +1200,25 @@ class Node(Common):
     def get_port(self) -> str | None:
         """Get the node's port."""
         return self.obj_dict["port"]  # type: ignore
+
+    def get_effective_attributes(self) -> EffectiveAttributes:
+        """Get this node's effective attributes, with provenance.
+
+        Defaults are resolved from the node's parent graph, honoring
+        the order in which defaults, edges and node statements appear.
+        See :meth:`Graph.get_effective_node_attributes`.
+        """
+        parent = self.get_parent_graph()
+        if parent is not None:
+            resolved = _lookup_effective_attributes(
+                _effective_node_attributes(parent), self.get_name()
+            )
+            if resolved:
+                return resolved
+        effective = EffectiveAttributes(node_name=self.get_name())
+        for attr, value in self.obj_dict.get("attributes", {}).items():
+            effective[attr] = EffectiveAttribute(attr, value, SOURCE_EXPLICIT)
+        return effective
 
     def add_style(self, style: str) -> None:
         styles = self.obj_dict["attributes"].get("style", None)
@@ -1070,6 +1559,82 @@ class Graph(Common):
     def get_edge_defaults(self) -> Any:
         graph_nodes = self.get_node("edge")
         return [node.get_attributes() for node in graph_nodes]
+
+    def get_effective_node_attributes(
+        self, name: str | Node | None = None
+    ) -> EffectiveAttributes | dict[str, EffectiveAttributes]:
+        """Resolve the effective attributes of one or all nodes.
+
+        The graph's statements are replayed in the order they were
+        written, following Graphviz's scoping rules:
+
+        - A ``node [...]`` default statement applies to every node
+          first seen *after* that statement. Changing a default later
+          does not retroactively affect nodes introduced before it.
+        - Entering a subgraph copies the defaults in effect at that
+          point. Defaults set inside the subgraph apply only within it,
+          and changes made in the parent afterwards do not leak in.
+        - A node is first seen when it appears in an edge endpoint or in
+          a node statement, whichever comes first. That is the moment
+          the current defaults are captured.
+        - Explicit node attributes always override inherited defaults,
+          no matter when the node was first seen.
+
+        With ``name``, a single :class:`EffectiveAttributes` mapping is
+        returned (empty if the node does not exist). Without it, a
+        dictionary mapping every node name to its
+        :class:`EffectiveAttributes` is returned, in order of first
+        appearance.
+
+        Each mapping compares equal to a plain ``{attribute: value}``
+        dictionary, while every value is an :class:`EffectiveAttribute`
+        that reports whether it was ``"explicit"`` or inherited from a
+        ``"default"``.
+        """
+        root = _resolution_root(self)
+        resolved = _effective_node_attributes(root)
+        if self is not root:
+            visible = _collect_node_names(self)
+            resolved = {
+                key: entry for key, entry in resolved.items() if key in visible
+            }
+        if isinstance(name, Node):
+            name = name.get_name()
+        if name is None:
+            return resolved
+        return _lookup_effective_attributes(resolved, str(name))
+
+    def get_effective_attributes(
+        self, name: str | Node | None = None
+    ) -> EffectiveAttributes | dict[str, EffectiveAttributes]:
+        """Alias for :meth:`get_effective_node_attributes`."""
+        return self.get_effective_node_attributes(name)
+
+    def iter_effective_attributes(
+        self,
+    ) -> Any:
+        """Yield ``(name, EffectiveAttributes)`` pairs in first-seen order."""
+        root = _resolution_root(self)
+        resolved = _effective_node_attributes(root)
+        if self is root:
+            yield from resolved.items()
+            return
+        visible = _collect_node_names(self)
+        yield from (
+            (key, entry) for key, entry in resolved.items() if key in visible
+        )
+
+    def export_effective_attributes(self) -> list[dict[str, Any]]:
+        """Export effective attributes as flat, serializable records.
+
+        Returns a list with one dictionary per attribute of every node,
+        in order of first appearance. See
+        :meth:`EffectiveAttributes.to_records`.
+        """
+        records: list[dict[str, Any]] = []
+        for _, attributes in self.iter_effective_attributes():
+            records.extend(attributes.to_records())
+        return records
 
     def set_simplify(self, simplify: bool) -> None:
         """Set whether to simplify or not.
