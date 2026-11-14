@@ -11,7 +11,10 @@ from .middlewares.enclosing import REMOVED_ENCLOSING_KEY
 from .middlewares.middleware import Middleware
 from .middlewares.parsestack import default_parse_stack
 from .middlewares.parsestack import default_unparse_stack
+from .middlewares.stringdefs import IMPORTED_STRING_SOURCE
+from .middlewares.stringdefs import STRING_SOURCE_KEY
 from .model import Block
+from .model import Entry
 from .model import String
 from .splitter import Splitter
 from .writer import BibtexFormat
@@ -170,6 +173,7 @@ def parse_string(
     parse_stack: Iterable[Middleware] | None = None,
     append_middleware: Iterable[Middleware] | None = None,
     library: Library | None = None,
+    source: str | None = None,
 ) -> Library:
     """Parse a BibTeX string.
 
@@ -197,11 +201,21 @@ def parse_string(
           do not raise, but yield ``DuplicateBlockKeyBlock`` instances
           (see ``library.failed_blocks``), just like duplicates within a single string.
 
+    :param source:
+        Optional label of the source (e.g. an institution) the parsed content
+        comes from. ``@string`` definitions and entries are tagged with it.
+        A reference then first resolves against the definitions of its own
+        source, so a source may override a shared abbreviation without changing
+        its meaning to another source; definitions of the other sources act as
+        a shared vocabulary and are consulted most-recent-first. ``None``
+        (default) keeps the historical, single-vocabulary behavior.
+
     :return: Library: Parsed BibTeX database
     """
     splitter = Splitter(bibstr=bibtex_str)
     parsed = splitter.split()
 
+    _tag_source(parsed, source)
     _seed_preexisting_strings(parsed, library)
 
     middleware: Middleware
@@ -214,6 +228,20 @@ def parse_string(
     new_blocks = [b for b in parsed.blocks if not _is_seeded_string(b)]
     library.add(new_blocks, fail_on_duplicate_key=False)
     return library
+
+
+def _tag_source(library: Library, source: str | None) -> None:
+    """Tag the ``@string`` and entry blocks of ``library`` with ``source``.
+
+    The tag drives source-scoped string resolution and is persisted on the
+    blocks, so blocks imported from different sources stay distinguishable
+    across later parses. No-op when no source is declared.
+    """
+    if source is None:
+        return
+    for block in library.blocks:
+        if isinstance(block, (String, Entry)):
+            block.set_parser_metadata(STRING_SOURCE_KEY, source)
 
 
 def _is_seeded_string(block: Block) -> bool:
@@ -266,6 +294,11 @@ def _seed_preexisting_strings(parsed: Library, library: Library | None) -> list[
             continue
         seed = deepcopy(string)
         seed.set_parser_metadata(_PREEXISTING_STRING_KEY, True)
+        # Keep the abbreviation scoped to its source of origin. Strings of a
+        # library that never tracked sources are grouped under a single shared
+        # ("imported") source, which the new content may reference but override.
+        if seed.get_parser_metadata(STRING_SOURCE_KEY) is None:
+            seed.set_parser_metadata(STRING_SOURCE_KEY, IMPORTED_STRING_SOURCE)
         _restore_enclosing(seed)
         seeds.append(seed)
 
@@ -279,6 +312,7 @@ def parse_file(
     parse_stack: Iterable[Middleware] | None = None,
     append_middleware: Iterable[Middleware] | None = None,
     encoding: str = "UTF-8",
+    source: str | None = None,
 ) -> Library:
     """Parse a BibTeX file
 
@@ -292,6 +326,7 @@ def parse_file(
         (ignored if a not-``None`` parse_stack is passed).
 
     :param encoding: Encoding of the .bib file. Default encoding is ``"UTF-8"``.
+    :param source: Optional source label; see :func:`parse_string` for its semantics.
     :return: Library: Parsed BibTeX library
     :raises LookupError: If the specified encoding is not recognized.
     """
@@ -303,7 +338,10 @@ def parse_file(
     with open(path, encoding=encoding) as f:
         bibtex_str = f.read()
         return parse_string(
-            bibtex_str, parse_stack=parse_stack, append_middleware=append_middleware
+            bibtex_str,
+            parse_stack=parse_stack,
+            append_middleware=append_middleware,
+            source=source,
         )
 
 

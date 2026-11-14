@@ -18,6 +18,8 @@ from bibtexparser.middlewares import MonthAbbreviationMiddleware
 from bibtexparser.middlewares import RemoveEnclosingMiddleware
 from bibtexparser.middlewares import SeparateCoAuthors
 from bibtexparser.middlewares import default_unparse_stack
+from bibtexparser.middlewares.interpolate import UNRESOLVED_REFERENCES_KEY
+from bibtexparser.middlewares.stringdefs import STRING_SOURCE_KEY
 from bibtexparser.model import DuplicateBlockKeyBlock
 from bibtexparser.model import Entry
 from bibtexparser.model import Field
@@ -408,6 +410,68 @@ def test_parse_string_into_existing_library_keeps_block_order():
         "Entry",
     ]
     assert [entry.key for entry in library.entries] == ["first", "second"]
+
+
+def test_parse_string_tags_strings_and_entries_with_source():
+    library = parse_string(
+        '@string{j = "Journal"}\n@article{a, journal = j}', source="library-a"
+    )
+    assert library.strings_dict["j"].get_parser_metadata(STRING_SOURCE_KEY) == "library-a"
+    assert library.entries_dict["a"].get_parser_metadata(STRING_SOURCE_KEY) == "library-a"
+
+
+def test_parse_string_without_source_keeps_single_vocabulary_behavior():
+    library = parse_string('@string{j = "Journal"}\n@article{a, journal = j}')
+    assert library.entries_dict["a"]["journal"] == "Journal"
+    assert library.strings_dict["j"].get_parser_metadata(STRING_SOURCE_KEY) is None
+
+
+def test_source_override_does_not_change_other_sources_abbreviation():
+    """The motivating merge scenario: both libraries define `j`."""
+    library = parse_string(
+        '@string{j = "Journal of A"}\n@article{a1, journal = j}', source="library-a"
+    )
+    parse_string(
+        '@string{j = "Journal of B"}\n@article{b1, journal = j}',
+        library=library,
+        source="library-b",
+    )
+
+    # Each entry resolves `j` against its own source's declaration.
+    assert library.entries_dict["a1"]["journal"] == "Journal of A"
+    assert library.entries_dict["b1"]["journal"] == "Journal of B"
+    # The surviving vocabulary block of A is untouched by B's override.
+    assert library.strings_dict["j"].value == "Journal of A"
+    assert library.strings_dict["j"].get_parser_metadata(STRING_SOURCE_KEY) == "library-a"
+
+
+def test_source_can_reference_shared_vocabulary_of_other_sources():
+    library = parse_string('@string{pub = "Shared Press"}', source="library-a")
+    parse_string(
+        '@article{b1, publisher = pub}',
+        library=library,
+        source="library-b",
+    )
+    assert library.entries_dict["b1"]["publisher"] == "Shared Press"
+
+
+def test_partial_resolution_preserves_fragments_and_keeps_import_alive():
+    library = parse_string(
+        '@string{p = q # "P"}\n@string{q = p # "Q"}\n@string{good = "Fine"}\n'
+        "@article{healthy, title = good}\n"
+        "@article{cyclic, journal = p}\n"
+        '@article{partial, note = "x" # p # "z" # missing}',
+        source="library-a",
+    )
+
+    assert library.failed_blocks == []
+    assert library.entries_dict["healthy"]["title"] == "Fine"
+    assert library.entries_dict["cyclic"].fields_dict["journal"].value == 'p # "Q" # "P"'
+    partial = library.entries_dict["partial"]
+    assert partial.fields_dict["note"].value == '"x" # p # "Q" # "P" # "z" # missing'
+    assert partial.get_parser_metadata(UNRESOLVED_REFERENCES_KEY) == {
+        "note": ["p", "missing"]
+    }
 
 
 def _library_with_n_entries(n: int) -> Library:

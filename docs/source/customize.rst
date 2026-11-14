@@ -48,7 +48,7 @@ part of the expected functionality for most users.
 
 Currently, the default parse stack consists of the following layers:
 
-* :class:`bibtexparser.middlewares.ResolveStringReferencesMiddleware`: De-Reference reference to @string definitions.
+* :class:`bibtexparser.middlewares.ResolveStringReferencesMiddleware`: De-references references to @string definitions, including nested macros and ``#`` concatenations. Resolution is source-aware: pass ``source`` to :func:`bibtexparser.parse_string` to keep an institution's abbreviation overrides scoped to that source while still referencing the shared vocabulary of the other sources. An undefined or mutually recursive macro does not fail the import; the already resolved fragments are kept and the unresolved chain is recorded in the entry's ``unresolved_string_references`` parser metadata.
 * :class:`bibtexparser.middlewares.RemoveEnclosingMiddleware`: Removes enclosing (e.g. curly braces or "") from values.
 
 The default write stack consists of the following layers:
