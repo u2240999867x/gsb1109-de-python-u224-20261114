@@ -1,0 +1,6 @@
+bus,frame_id,frame_name,signal,mux,is_selector,start_bit,length,byte_order,is_signed,factor,offset,unit
+1,0x100,MotorStatus,Branch,,yes,0,4,little,no,1,0,
+1,0x100,MotorStatus,SignedA,1,no,8,12,little,yes,0.5,0,Nm
+1,0x100,MotorStatus,SignedB,2,no,8,12,little,yes,0.5,0,Nm
+2,0x200,PressureBlock,Pressure,,no,7,12,big,yes,0.1,-50,kPa
+2,0x200,PressureBlock,Flags,,no,16,8,little,no,1,0,

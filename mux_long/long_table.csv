@@ -1,0 +1,10 @@
+timestamp,bus,frame_id,frame_name,signal,mux,raw,physical,unit,status
+0.000000,1,0x100,MotorStatus,Branch,,1,1,,ok
+0.000000,1,0x100,MotorStatus,SignedA,1,-25,-12.5,Nm,ok
+0.100000,1,0x100,MotorStatus,Branch,,2,2,,ok
+0.100000,1,0x100,MotorStatus,SignedB,2,312,156,Nm,ok
+0.200000,1,0x100,MotorStatus,Branch,,,,,missing_bytes
+0.200000,1,0x100,MotorStatus,SignedA,1,,,Nm,selector_missing
+0.200000,1,0x100,MotorStatus,SignedB,2,,,Nm,selector_missing
+0.300000,2,0x200,PressureBlock,Pressure,,-25,-52.5,kPa,ok
+0.300000,2,0x200,PressureBlock,Flags,,165,165,,ok
