@@ -7,6 +7,7 @@ __all__ = [
     "MESSAGE_READERS",
     "MESSAGE_WRITERS",
     "ASCReader",
+    "ASCTimeline",
     "ASCWriter",
     "BLFReader",
     "BLFWriter",
@@ -27,7 +28,10 @@ __all__ = [
     "TRCFileVersion",
     "TRCReader",
     "TRCWriter",
+    "TimelineBlock",
+    "TimelineFrame",
     "asc",
+    "asc_timeline",
     "blf",
     "canutils",
     "csv",
@@ -48,6 +52,7 @@ from .player import MESSAGE_READERS, LogReader, MessageSync
 
 # Format specific
 from .asc import ASCReader, ASCWriter
+from .asc_timeline import ASCTimeline, TimelineBlock, TimelineFrame
 from .blf import BLFReader, BLFWriter
 from .canutils import CanutilsLogReader, CanutilsLogWriter
 from .csv import CSVReader, CSVWriter
