@@ -113,6 +113,66 @@ def test_when_multiple_style_elements_have_same_style_id_then_only_first_element
     )
 
 
+def test_default_character_properties_are_empty_without_document_defaults():
+    element = xml_element("w:styles")
+    styles = read_styles_xml_element(element)
+    assert_equal({}, styles.find_default_character_properties())
+
+
+def test_default_character_properties_are_read_from_document_defaults():
+    element = xml_element("w:styles", {}, [
+        xml_element("w:docDefaults", {}, [
+            xml_element("w:rPrDefault", {}, [
+                xml_element("w:rPr", {}, [
+                    xml_element("w:b"),
+                    xml_element("w:u", {"w:val": "single"}),
+                ]),
+            ]),
+        ]),
+    ])
+    styles = read_styles_xml_element(element)
+    assert_equal(
+        {"bold": True, "underline": True},
+        styles.find_default_character_properties(),
+    )
+
+
+def test_character_properties_are_read_from_style_run_properties():
+    element = xml_element("w:styles", {}, [
+        xml_element("w:style", {"w:type": "character", "w:styleId": "C"}, [
+            xml_element("w:name", {"w:val": "Character"}),
+            xml_element("w:rPr", {}, [
+                xml_element("w:b", {"w:val": "0"}),
+                xml_element("w:i"),
+            ]),
+        ]),
+    ])
+    styles = read_styles_xml_element(element)
+    assert_equal(
+        {"bold": False, "italic": True},
+        styles.find_character_style_by_id("C").character_properties,
+    )
+
+
+def test_based_on_style_is_read():
+    element = xml_element("w:styles", {}, [
+        xml_element("w:style", {"w:type": "character", "w:styleId": "C"}, [
+            xml_element("w:name", {"w:val": "Character"}),
+            xml_element("w:basedOn", {"w:val": "Base"}),
+        ]),
+    ])
+    styles = read_styles_xml_element(element)
+    assert_equal("Base", styles.find_character_style_by_id("C").based_on)
+
+
+def test_style_without_run_properties_has_empty_character_properties():
+    element = xml_element("w:styles", {}, [
+        _character_style_element("C", "Character"),
+    ])
+    styles = read_styles_xml_element(element)
+    assert_equal({}, styles.find_character_style_by_id("C").character_properties)
+
+
 def _paragraph_style_element(style_id, name):
     return _style_element("paragraph", style_id, name)
 

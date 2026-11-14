@@ -22,6 +22,7 @@ class Paragraph(HasChildren):
     numbering = cobble.field()
     alignment = cobble.field()
     indent = cobble.field()
+    character_properties = cobble.field(default=None)
 
 
 @cobble.data
@@ -54,6 +55,7 @@ class Run(HasChildren):
     font = cobble.field()
     font_size = cobble.field()
     highlight = cobble.field()
+    character_properties = cobble.field(default=None)
 
 @cobble.data
 class Text(Element):
@@ -126,11 +128,13 @@ def document(children, notes=None, comments=None):
         comments = []
     return Document(children, notes, comments=comments)
 
-def paragraph(children, style_id=None, style_name=None, numbering=None, alignment=None, indent=None):
+def paragraph(children, style_id=None, style_name=None, numbering=None, alignment=None, indent=None, character_properties=None):
     if indent is None:
         indent = paragraph_indent()
+    if character_properties is None:
+        character_properties = {}
 
-    return Paragraph(children, style_id, style_name, numbering, alignment=alignment, indent=indent)
+    return Paragraph(children, style_id, style_name, numbering, alignment=alignment, indent=indent, character_properties=character_properties)
 
 def paragraph_indent(start=None, end=None, first_line=None, hanging=None):
     return ParagraphIndent(start=start, end=end, first_line=first_line, hanging=hanging)
@@ -149,9 +153,12 @@ def run(
     font=None,
     font_size=None,
     highlight=None,
+    character_properties=None,
 ):
     if vertical_alignment is None:
         vertical_alignment = VerticalAlignment.baseline
+    if character_properties is None:
+        character_properties = {}
     return Run(
         children=children,
         style_id=style_id,
@@ -166,6 +173,7 @@ def run(
         font=font,
         font_size=font_size,
         highlight=highlight,
+        character_properties=character_properties,
     )
 
 class VerticalAlignment(object):

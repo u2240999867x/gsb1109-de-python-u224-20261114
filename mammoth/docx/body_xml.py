@@ -106,6 +106,8 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         is_small_caps = read_boolean_element(properties.find_child("w:smallCaps"))
         highlight = read_highlight_value(properties.find_child_or_null("w:highlight").attributes.get("w:val"))
 
+        character_properties = _read_character_properties(properties)
+
         def add_complex_field_hyperlink(children):
             hyperlink_kwargs = current_hyperlink_kwargs()
             if hyperlink_kwargs is None:
@@ -130,6 +132,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
                 font=font,
                 font_size=font_size,
                 highlight=highlight,
+                character_properties=character_properties,
             ))
 
     def _read_run_style(properties):
@@ -153,6 +156,32 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         else:
             return value
 
+    def read_optional_boolean_switch(element):
+        if element is None:
+            return None
+        else:
+            return read_boolean_attribute_value(element.attributes.get("w:val"))
+
+    def read_optional_underline_switch(element):
+        if element is None:
+            return None
+        else:
+            return element.attributes.get("w:val") not in [None, "false", "0", "none"]
+
+    def _read_character_properties(properties):
+        return {
+            name: value
+            for name, value in [
+                ("bold", read_optional_boolean_switch(properties.find_child("w:b"))),
+                ("italic", read_optional_boolean_switch(properties.find_child("w:i"))),
+                ("underline", read_optional_underline_switch(properties.find_child("w:u"))),
+                ("strikethrough", read_optional_boolean_switch(properties.find_child("w:strike"))),
+                ("all_caps", read_optional_boolean_switch(properties.find_child("w:caps"))),
+                ("small_caps", read_optional_boolean_switch(properties.find_child("w:smallCaps"))),
+            ]
+            if value is not None
+        }
+
     def paragraph(element):
         properties = element.find_child_or_null("w:pPr")
 
@@ -166,6 +195,9 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         else:
             alignment = properties.find_child_or_null("w:jc").attributes.get("w:val")
             indent = _read_paragraph_indent(properties.find_child_or_null("w:ind"))
+            paragraph_character_properties = _read_character_properties(
+                properties.find_child_or_null("w:rPr"),
+            )
 
             children_xml = element.children
             if deleted_paragraph_contents:
@@ -185,6 +217,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
                     ),
                     alignment=alignment,
                     indent=indent,
+                    character_properties=paragraph_character_properties,
                 )).append_extra()
 
     def _read_paragraph_style(properties):

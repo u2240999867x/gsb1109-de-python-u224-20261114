@@ -20,6 +20,17 @@ _empty_result = results.success([])
 
 
 def read(fileobj, external_file_access=False):
+    return _read_package(fileobj, external_file_access).map(lambda value: value[0])
+
+
+def read_emphasis(fileobj, external_file_access=False):
+    from .. import emphasis
+    return _read_package(fileobj, external_file_access).map(
+        lambda value: emphasis.extract_emphasis(value[0], value[1]),
+    )
+
+
+def _read_package(fileobj, external_file_access):
     zip_file = open_zip(fileobj, "r")
     part_paths = _find_part_paths(zip_file)
     read_part_with_body = _part_with_body_reader(
@@ -28,12 +39,19 @@ def read(fileobj, external_file_access=False):
         part_paths=part_paths,
         external_file_access=external_file_access,
     )
+    styles = _try_read_entry_or_default(
+        zip_file,
+        part_paths.styles,
+        read_styles_xml_element,
+        Styles.EMPTY,
+    )
 
     return results.combine([
         _read_notes(read_part_with_body, part_paths),
         _read_comments(read_part_with_body, part_paths),
     ]).bind(lambda referents:
         _read_document(zip_file, read_part_with_body, notes=referents[0], comments=referents[1], part_paths=part_paths)
+        .map(lambda document: (document, styles))
     )
 
 

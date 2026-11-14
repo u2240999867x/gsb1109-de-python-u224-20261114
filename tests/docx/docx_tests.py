@@ -72,6 +72,47 @@ def test_error_is_raised_when_main_document_part_does_not_exist():
         str(error),
     )
 
+
+def test_emphasis_spans_are_extracted_from_the_package_using_its_styles():
+    fileobj = _create_zip({
+        "word/document.xml": textwrap.dedent("""\
+            <?xml version="1.0" encoding="utf-8" ?>
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                <w:body>
+                    <w:p>
+                        <w:r><w:t>Hello </w:t></w:r>
+                        <w:r><w:rPr><w:b/></w:rPr><w:t>world</w:t></w:r>
+                    </w:p>
+                </w:body>
+            </w:document>
+        """),
+        "word/styles.xml": textwrap.dedent("""\
+            <?xml version="1.0" encoding="utf-8" ?>
+            <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:docDefaults>
+                    <w:rPrDefault><w:rPr/></w:rPrDefault>
+                </w:docDefaults>
+            </w:styles>
+        """),
+        "_rels/.rels": textwrap.dedent("""\
+            <?xml version="1.0" encoding="utf-8"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="/word/document.xml"/>
+            </Relationships>
+        """),
+    })
+
+    result = docx.read_emphasis(fileobj=fileobj)
+
+    assert_equal([], result.messages)
+    spans = result.value.emphasis_spans
+    assert_equal(1, len(spans))
+    assert_equal("world", spans[0].text)
+    assert_equal((6, 11), (spans[0].start, spans[0].end))
+    assert_equal(True, spans[0].properties.bold)
+
+
 class PartPathsTests(object):
     def test_main_document_part_is_found_using_package_relationships(self):
         fileobj = _create_zip({

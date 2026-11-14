@@ -84,6 +84,23 @@ class ParagraphTests(object):
         paragraph = _read_and_get_document_xml_element(paragraph_xml)
         assert_equal(None, paragraph.alignment)
 
+    def test_paragraph_without_mark_run_properties_has_empty_character_properties(self):
+        paragraph_xml = xml_element("w:p")
+        paragraph = _read_and_get_document_xml_element(paragraph_xml)
+        assert_equal({}, paragraph.character_properties)
+
+    def test_paragraph_character_properties_are_read_from_paragraph_mark_run_properties(self):
+        paragraph_xml = xml_element("w:p", {}, [
+            xml_element("w:pPr", {}, [
+                xml_element("w:rPr", {}, [
+                    xml_element("w:b", {"w:val": "0"}),
+                    xml_element("w:i"),
+                ]),
+            ]),
+        ])
+        paragraph = _read_and_get_document_xml_element(paragraph_xml)
+        assert_equal({"bold": False, "italic": True}, paragraph.character_properties)
+
     def test_paragraph_has_justification_read_from_paragraph_properties_if_present(self):
         justification_xml = xml_element("w:jc", {"w:val": "center"})
         properties_xml = xml_element("w:pPr", {}, [justification_xml])
@@ -420,6 +437,22 @@ class RunTests(object):
         highlight_xml = xml_element("w:highlight", {"w:val": "none"})
         run = self._read_run_with_properties([highlight_xml])
         assert_equal(None, run.highlight)
+
+    def test_run_without_switch_elements_has_empty_character_properties(self):
+        run = self._read_run_with_properties([])
+        assert_equal({}, run.character_properties)
+
+    def test_character_properties_record_an_enabled_switch(self):
+        run = self._read_run_with_properties([xml_element("w:b")])
+        assert_equal({"bold": True}, run.character_properties)
+
+    def test_character_properties_record_an_explicitly_disabled_switch(self):
+        run = self._read_run_with_properties([xml_element("w:b", {"w:val": "0"})])
+        assert_equal({"bold": False}, run.character_properties)
+
+    def test_underline_switch_with_none_value_is_recorded_as_disabled(self):
+        run = self._read_run_with_properties([xml_element("w:u", {"w:val": "none"})])
+        assert_equal({"underline": False}, run.character_properties)
 
     def _read_run_with_properties(self, properties, styles=None):
         properties_xml = xml_element("w:rPr", {}, properties)

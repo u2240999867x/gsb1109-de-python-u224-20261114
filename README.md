@@ -146,6 +146,30 @@ with open("document.docx", "rb") as docx_file:
     messages = result.messages # Any messages
 ```
 
+To find out which characters are actually emphasised rather than just which
+runs are bold, use `mammoth.extract_emphasis`. It combines the document
+defaults, the paragraph and character style chains, paragraph mark properties
+and direct run properties using Word's toggle rules. An explicit switch off
+overrides an inherited switch on. Adjacent text split across runs or
+hyperlinks is merged into a single segment only when its effective properties
+match. Each segment carries half-open `start`/`end` character offsets into its
+paragraph, the effective properties and the `sources` that produced them.
+
+```python
+with open("document.docx", "rb") as docx_file:
+    result = mammoth.extract_emphasis(docx_file)
+    for span in result.value.emphasis_spans:
+        # span.paragraph_index, span.start, span.end, span.text,
+        # span.properties, span.sources
+        print(span.text, span.properties)
+```
+
+Segments that cancel back out to plain text (for instance a bold paragraph
+style followed by a character style that turns bold off) are still available
+on `result.value.spans`, with `span.sources` recording the deciding layers.
+Use `result.value.segment_at(paragraph_index, offset)` to look up the segment
+covering a position.
+
 
 #### Custom style map
 
@@ -339,6 +363,29 @@ Each paragraph is followed by two newlines.
 * Returns a result with the following properties:
 
   * `value`: the raw text
+
+  * `messages`: any messages, such as errors and warnings
+
+#### `mammoth.extract_emphasis(fileobj)`
+
+Extract the character segments that are actually emphasised, after merging
+the document defaults, paragraph and character style chains (including
+`basedOn`), paragraph mark properties and direct run properties. Toggle
+switches are applied as overrides, so an explicit switch off suppresses an
+inherited switch on.
+
+* `fileobj`: a file-like object containing the source document.
+  Files should be opened in binary mode.
+
+* Returns a result with the following properties:
+
+  * `value`: an `EmphasisResult`. Its `spans` property contains every merged
+    segment, including segments that resolve to plain text, while
+    `emphasis_spans` contains only the segments that remain emphasised. Each
+    span has `paragraph_index`, half-open `start` and `end` offsets into the
+    paragraph, `text`, the effective `properties` and a `sources` map
+    describing the layers that set each property. `segment_at(paragraph_index,
+    offset)` returns the segment covering a position.
 
   * `messages`: any messages, such as errors and warnings
 

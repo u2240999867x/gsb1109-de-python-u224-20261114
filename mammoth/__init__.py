@@ -1,8 +1,8 @@
-from . import docx, conversion, options, images, transforms, underline
+from . import docx, conversion, options, images, transforms, underline, emphasis
 from .raw_text import extract_raw_text_from_element
 from .docx.style_map import write_style_map, read_style_map
 
-__all__ = ["convert_to_html", "extract_raw_text", "images", "transforms", "underline"]
+__all__ = ["convert_to_html", "extract_raw_text", "images", "transforms", "underline", "emphasis", "extract_emphasis"]
 
 
 _undefined = object()
@@ -49,6 +49,10 @@ def convert(
 
 def extract_raw_text(fileobj):
     return docx.read(fileobj).map(extract_raw_text_from_element)
+
+
+def extract_emphasis(fileobj):
+    return docx.read_emphasis(fileobj)
 
 
 def embed_style_map(fileobj, style_map):

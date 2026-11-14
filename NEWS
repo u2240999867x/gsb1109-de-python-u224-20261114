@@ -1,3 +1,14 @@
+# Unreleased
+
+* Add `mammoth.extract_emphasis` and `mammoth.emphasis.extract_emphasis`, which
+  return the ranged, merged character segments that are actually emphasised.
+  Document defaults, paragraph and character style chains (including
+  `basedOn`), paragraph mark properties and direct run properties are combined
+  using Word's toggle rules, so an explicit off suppresses an inherited on.
+  Adjacent text split across runs or hyperlinks is merged only when its
+  effective properties match, and the recorded sources explain cancelling
+  flips that resolve back to plain text.
+
 # 1.13.0
 
 * Read the children of w:customXml elements.
