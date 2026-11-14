@@ -745,3 +745,67 @@ def test_xopen_dev_stdin_read(threads, ext):
         check=True,
     )
     assert result.stdout == CONTENT + "\n"
+
+
+class _ByteAtATimeStream(io.RawIOBase):
+    """A non-seekable binary stream whose read never returns more than one byte."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+        self._pos = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        if size == 0 or self._pos >= len(self._data):
+            return b""
+        self._pos += 1
+        return self._data[self._pos - 1 : self._pos]
+
+    def readinto(self, buffer) -> int:
+        data = self.read(len(buffer))
+        buffer[: len(data)] = data
+        return len(data)
+
+
+@pytest.mark.parametrize("threads", (0, 1))
+@pytest.mark.parametrize("extension", extensions)
+def test_detect_from_non_seekable_stream(extension, threads):
+    if extension == ".zst" and zstd is None:
+        return
+    if extension == ".lz4" and lz4 is None:
+        return
+    data = (TEST_DIR / f"file.txt{extension}").read_bytes()
+    for stream in (
+        _ByteAtATimeStream(data),
+        io.BufferedReader(_ByteAtATimeStream(data)),
+    ):
+        with xopen(stream, "rb", threads=threads) as f:
+            assert f.read() == CONTENT.encode("utf-8")
+
+
+@pytest.mark.parametrize("threads", (0, 1))
+@pytest.mark.parametrize("prefix", [b"", b"\x1f", b"\x1fnotgz", b"\xfd\x37\x7a"])
+def test_probed_bytes_are_preserved_for_plain_text(prefix, threads):
+    data = prefix + b"not compressed\n"
+    with xopen(_ByteAtATimeStream(data), "rb", threads=threads) as f:
+        assert f.read() == data
+
+
+@pytest.mark.parametrize(
+    "magic",
+    [b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00", b"\x28\xb5\x2f\xfd", b"\x04\x22\x4d\x18"],
+)
+@pytest.mark.parametrize("threads", (0, 1))
+def test_corrupt_body_with_recognized_magic_raises(magic, threads):
+    if magic == b"\x04\x22\x4d\x18" and lz4 is None:
+        pytest.skip("lz4 is not installed")
+    data = magic + b"certainly not a valid compressed body"
+    with pytest.raises(Exception):
+        f = xopen(_ByteAtATimeStream(data), "rb", threads=threads)
+        f.read()
+        f.close()  # pragma: no cover

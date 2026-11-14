@@ -141,6 +141,16 @@ def _available_cpu_count() -> int:
     return 1 if count is None else count
 
 
+class _ProgramNotFoundError(OSError):
+    """
+    Raised when an external compression program cannot be started.
+
+    Errors that occur after the program has started (for example, because the
+    input is corrupt) are not converted to this exception, so callers never
+    mistake bad input for a missing program and fall back to another backend.
+    """
+
+
 class _PipedCompressionProgram(io.IOBase):
     """
     Read and write compressed files by running an external process and piping into it.
@@ -230,10 +240,12 @@ class _PipedCompressionProgram(io.IOBase):
                 close_fds=close_fds,
                 pipesize=_MAX_PIPE_SIZE,
             )  # type: ignore
-        except OSError:
+        except OSError as error:
             if self.closefd:
                 self.fileobj.close()
-            raise
+            raise _ProgramNotFoundError(
+                f"Could not start {self._program_args[0]}: {error}"
+            ) from error
         assert self.process.stdin is not None
         if "r" in self._mode:
             self.in_pipe = self.process.stdin
@@ -438,7 +450,7 @@ def _open_bz2(
                 threads=threads,
                 program_settings=_PROGRAM_SETTINGS["pbzip2"],
             )
-        except OSError:
+        except _ProgramNotFoundError:
             pass  # We try without threads.
 
     bz2_file = bz2.open(filename, mode, compresslevel)
@@ -468,7 +480,7 @@ def _open_xz(
                 threads,
                 _PROGRAM_SETTINGS["xz"],
             )
-        except OSError:
+        except _ProgramNotFoundError:
             pass  # We try without threads.
 
     if "r" in mode:
@@ -508,7 +520,7 @@ def _open_zst(
                 threads,
                 _ProgramSettings(program_args, tuple(range(1, 20)), "-T"),
             )
-        except OSError:
+        except _ProgramNotFoundError:
             if zstd is None:
                 # No fallback available
                 raise
@@ -557,7 +569,7 @@ def _open_lz4(
         return _PipedCompressionProgram(
             filename, mode, compresslevel, threads, _PROGRAM_SETTINGS["lz4"]
         )
-    except OSError as error:
+    except _ProgramNotFoundError as error:
         if lz4 is None:
             raise ImportError(
                 "LZ4 support requires xopen[lz4] or the lz4 program"
@@ -623,9 +635,11 @@ def _open_gz(
                     threads,
                     _PROGRAM_SETTINGS[program],
                 )
-            # ValueError when compresslevel is not supported. i.e. gzip and level 0
-            except (OSError, ValueError):
+            except _ProgramNotFoundError:
                 pass  # We try without threads.
+            # ValueError when compresslevel is not supported. i.e. gzip and level 0
+            except ValueError:
+                pass
     return _open_reproducible_gzip(filename, mode=mode, compresslevel=compresslevel)
 
 
@@ -669,6 +683,132 @@ def _open_reproducible_gzip(filename, mode: str, compresslevel: int):
     return gzip_file
 
 
+_MAGIC_NUMBERS: tuple[tuple[bytes, str], ...] = (
+    # https://tools.ietf.org/html/rfc1952#page-6
+    (b"\x1f\x8b", "gz"),
+    # https://en.wikipedia.org/wiki/List_of_file_signatures
+    (b"\x42\x5a\x68", "bz2"),
+    # https://tukaani.org/xz/xz-file-format.txt
+    (b"\xfd\x37\x7a\x58\x5a\x00", "xz"),
+    # https://datatracker.ietf.org/doc/html/rfc8478#section-3.1.1
+    (b"\x28\xb5\x2f\xfd", "zst"),
+    # https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
+    (b"\x04\x22\x4d\x18", "lz4"),
+)
+_MAX_MAGIC_LENGTH = max(len(magic) for magic, _ in _MAGIC_NUMBERS)
+
+
+class _PrefixReader(io.RawIOBase):
+    """
+    A raw binary reader that first returns bytes already consumed during format
+    detection and then continues reading from the underlying stream.
+    """
+
+    def __init__(self, fileobj: BinaryIO, prefix: bytes):
+        self._fileobj = fileobj
+        self._prefix = memoryview(prefix)
+        self._prefix_pos = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def readinto(self, b) -> int:
+        view = memoryview(b).cast("B")
+        n = 0
+        if self._prefix_pos < len(self._prefix):
+            take = min(len(view), len(self._prefix) - self._prefix_pos)
+            view[:take] = self._prefix[self._prefix_pos : self._prefix_pos + take]
+            self._prefix_pos += take
+            n += take
+        if n < len(view):
+            if hasattr(self._fileobj, "readinto"):
+                read = self._fileobj.readinto
+            else:
+
+                def read(buffer):
+                    data = self._fileobj.read(len(buffer))
+                    buffer[: len(data)] = data
+                    return len(data)
+
+            extra = read(view[n:])
+            if extra:
+                n += extra
+        return n
+
+    def close(self) -> None:
+        # Do not close the underlying stream: it remains owned by the caller.
+        super().close()
+
+
+def _read_prefix(fileobj: BinaryIO, size: int) -> bytes:
+    """
+    Read up to size bytes, calling read repeatedly because a single read is
+    allowed to return fewer bytes than requested (even just one byte).
+    """
+    chunks = []
+    remaining = size
+    while remaining > 0:
+        if hasattr(fileobj, "read"):
+            chunk = fileobj.read(remaining)
+        else:
+            buffer = bytearray(remaining)
+            n = fileobj.readinto(buffer)
+            chunk = bytes(buffer[:n]) if n else b""
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _detect_format_from_prefix(prefix: bytes) -> str | None:
+    """
+    Return the compression format if complete magic number is present.
+    A partial magic number (for example, an empty file or plain text that
+    merely starts with 0x1f) does not identify a compression format.
+    """
+    for magic, format in _MAGIC_NUMBERS:
+        if prefix.startswith(magic):
+            return format
+    return None
+
+
+def _detect_format_from_stream(fileobj: BinaryIO) -> tuple[str | None, BinaryIO]:
+    """
+    Detect the compression format from the beginning of a stream and return a
+    stream that still contains all bytes read during detection.
+
+    If the stream is seekable, its position is restored. Otherwise, the bytes
+    that were read are replayed by wrapping the stream.
+    """
+    if hasattr(fileobj, "readable") and not fileobj.readable():
+        return None, fileobj
+
+    position = None
+    if hasattr(fileobj, "seekable") and fileobj.seekable():
+        try:
+            position = fileobj.tell()
+        except (OSError, io.UnsupportedOperation):
+            position = None
+
+    prefix = _read_prefix(fileobj, _MAX_MAGIC_LENGTH)
+    format = _detect_format_from_prefix(prefix)
+
+    if position is not None:
+        try:
+            fileobj.seek(position)
+            return format, fileobj
+        except (OSError, io.UnsupportedOperation):
+            pass
+
+    if not prefix:
+        return format, fileobj
+    return format, io.BufferedReader(_PrefixReader(fileobj, prefix))
+
+
 def _detect_format_from_content(filename: FileOrPath) -> str | None:
     """
     Attempts to detect file format from the content by reading the first
@@ -676,34 +816,8 @@ def _detect_format_from_content(filename: FileOrPath) -> str | None:
     """
     fileobj, closefd = _file_or_path_to_binary_stream(filename, "rb")
     try:
-        if not fileobj.readable():
-            return None
-        if hasattr(fileobj, "peek"):
-            bs = fileobj.peek(6)
-        elif hasattr(fileobj, "seekable") and fileobj.seekable():
-            current_pos = fileobj.tell()
-            bs = fileobj.read(6)
-            fileobj.seek(current_pos)
-        else:
-            return None
-
-        if bs[:2] == b"\x1f\x8b":
-            # https://tools.ietf.org/html/rfc1952#page-6
-            return "gz"
-        elif bs[:3] == b"\x42\x5a\x68":
-            # https://en.wikipedia.org/wiki/List_of_file_signatures
-            return "bz2"
-        elif bs[:6] == b"\xfd\x37\x7a\x58\x5a\x00":
-            # https://tukaani.org/xz/xz-file-format.txt
-            return "xz"
-        elif bs[:4] == b"\x28\xb5\x2f\xfd":
-            # https://datatracker.ietf.org/doc/html/rfc8478#section-3.1.1
-            return "zst"
-        elif bs[:4] == b"\x04\x22\x4d\x18":
-            # https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
-            return "lz4"
-
-        return None
+        format, _ = _detect_format_from_stream(fileobj)
+        return format
     finally:
         if closefd:
             fileobj.close()
@@ -732,7 +846,11 @@ def _file_or_path_to_binary_stream(
         return open(os.fspath(file_or_path), binary_mode), True  # type: ignore
     if isinstance(file_or_path, io.TextIOWrapper):
         return file_or_path.buffer, False
-    if hasattr(file_or_path, "readinto") or hasattr(file_or_path, "write"):
+    if (
+        hasattr(file_or_path, "readinto")
+        or hasattr(file_or_path, "write")
+        or ("r" in binary_mode and hasattr(file_or_path, "read"))
+    ):
         # Very lenient fallback for all filelike objects. If the filelike
         # object is not binary, this will crash at a later point.
         return file_or_path, False  # type: ignore
@@ -870,7 +988,15 @@ def xopen(
         )
     detected_format = format or _detect_format_from_extension(filepath)
     if detected_format is None and "r" in mode:
-        detected_format = _detect_format_from_content(filename)
+        if isinstance(filename, (str, bytes)) or hasattr(filename, "__fspath__"):
+            # File paths can be reopened, so detection does not need to
+            # preserve the stream.
+            detected_format = _detect_format_from_content(filename)
+        else:
+            # For non-seekable streams (pipes etc.), hand downstream the
+            # stream that replays the bytes read during detection.
+            stream, _ = _file_or_path_to_binary_stream(filename, binary_mode)
+            detected_format, filename = _detect_format_from_stream(stream)
 
     if detected_format == "gz":
         opened_file = _open_gz(filename, binary_mode, compresslevel, threads)
