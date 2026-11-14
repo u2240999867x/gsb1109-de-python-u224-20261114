@@ -183,6 +183,22 @@ The following class can be used to read messages from TRC file:
     :show-inheritance:
     :members:
 
+Use :meth:`~can.TRCReader.iter_records` to read the same messages together
+with their offline record metadata (direction, declared length, actual payload
+bytes and source line number). :class:`~can.TRCReader` also exposes
+``records`` and ``segment_errors`` after iteration. Each record keeps the
+``;$COLUMNS`` declaration and ``;$FILEVERSION`` active for its own header
+block, and optional ``direction``/``file_version`` fields allow a reader to be
+scoped to a single shard. Segment errors cover the contiguous source lines
+affected by a bad declaration or malformed run; earlier records remain
+available.
+
+.. autoclass:: can.TRCRecord
+    :members:
+
+.. autoclass:: can.TRCSegmentError
+    :members:
+
 
 Rotating Loggers
 ----------------

@@ -1,0 +1,6 @@
+``TRCReader`` now resolves v2 fields from each header block's own
+``;$COLUMNS`` declaration, including when the Rx/Tx direction column is moved
+to the end. Header blocks are scoped per file section, duplicate or missing key
+columns and malformed records are reported as line ranges, and
+``TRCReader.iter_records()`` exposes direction, declared length, actual data
+bytes and the source line number for each record.

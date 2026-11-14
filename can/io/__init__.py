@@ -26,6 +26,8 @@ __all__ = [
     "SqliteWriter",
     "TRCFileVersion",
     "TRCReader",
+    "TRCRecord",
+    "TRCSegmentError",
     "TRCWriter",
     "asc",
     "blf",
@@ -54,4 +56,4 @@ from .csv import CSVReader, CSVWriter
 from .mf4 import MF4Reader, MF4Writer
 from .printer import Printer
 from .sqlite import SqliteReader, SqliteWriter
-from .trc import TRCFileVersion, TRCReader, TRCWriter
+from .trc import TRCFileVersion, TRCReader, TRCRecord, TRCSegmentError, TRCWriter

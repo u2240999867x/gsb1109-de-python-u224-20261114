@@ -52,6 +52,8 @@ __all__ = [
     "SqliteWriter",
     "TRCFileVersion",
     "TRCReader",
+    "TRCRecord",
+    "TRCSegmentError",
     "TRCWriter",
     "ThreadSafeBus",
     "bit_timing",
@@ -117,6 +119,8 @@ from .io import (
     SqliteWriter,
     TRCFileVersion,
     TRCReader,
+    TRCRecord,
+    TRCSegmentError,
     TRCWriter,
 )
 from .listener import AsyncBufferedReader, BufferedReader, Listener, RedirectReader
