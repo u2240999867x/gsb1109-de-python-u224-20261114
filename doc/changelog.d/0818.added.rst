@@ -1,0 +1,3 @@
+Added ``can.PlaybackTimeline`` as a shared recording-to-playback time mapping.
+``can.MessageSync.timeline`` exposes it, together with the recorded range of
+every shortened pause and exact ranges for frames that share a sample time.

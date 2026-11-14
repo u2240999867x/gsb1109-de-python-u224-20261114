@@ -202,3 +202,17 @@ Replaying Files
 .. autoclass:: can.MessageSync
     :members:
 
+When replay shortens long pauses, the mapping between recorded sample time
+and playback time is available from :attr:`can.MessageSync.timeline`.
+The same :class:`can.PlaybackTimeline` answers both directions and retains
+every shortened pause.
+
+.. autoclass:: can.PlaybackTimeline
+    :members:
+
+.. autoclass:: can.PlaybackWindow
+    :members:
+
+.. autoclass:: can.RecordedRange
+    :members:
+
