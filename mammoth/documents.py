@@ -15,6 +15,20 @@ class Document(HasChildren):
     notes = cobble.field()
     comments = cobble.field()
 
+    @property
+    def comment_ranges(self):
+        from . import raw_text
+        return raw_text.extract_comment_ranges_from_element(self)
+
+    @property
+    def annotations(self):
+        return self.comment_ranges
+
+    @property
+    def ranges(self):
+        return self.comment_ranges
+
+
 @cobble.data
 class Paragraph(HasChildren):
     style_id = cobble.field()
@@ -267,13 +281,56 @@ class Comment(object):
     body = cobble.field()
     author_name = cobble.field()
     author_initials = cobble.field()
+    start = cobble.field(default=None)
+    end = cobble.field(default=None)
 
-def comment(comment_id, body, author_name=None, author_initials=None):
+    def copy(self, **kwargs):
+        return cobble.copy(self, **kwargs)
+
+    @property
+    def comment_range(self):
+        if self.start is None:
+            return None
+        return comment_range(self.comment_id, self.start, self.end)
+
+    @property
+    def range(self):
+        return self.comment_range
+
+    @property
+    def id(self):
+        return self.comment_id
+
+    @property
+    def text(self):
+        from . import raw_text
+        return raw_text.extract_raw_text_from_element(
+            document(self.body)
+        ).strip()
+
+    def to_dict(self):
+        return {
+            "comment_id": self.comment_id,
+            "id": self.comment_id,
+            "start": self.start,
+            "end": self.end,
+            "author_name": self.author_name,
+            "author_initials": self.author_initials,
+            "text": self.text,
+        }
+
+    def __getitem__(self, key):
+        return self.to_dict()[key]
+
+
+def comment(comment_id, body, author_name=None, author_initials=None, start=None, end=None):
     return Comment(
         comment_id=comment_id,
         body=body,
         author_name=author_name,
         author_initials=author_initials,
+        start=start,
+        end=end,
     )
 
 @cobble.data
@@ -281,6 +338,110 @@ class CommentReference(Element):
     comment_id = cobble.field()
 
 comment_reference = CommentReference
+
+
+@cobble.data
+class CommentRangeStart(Element):
+    comment_id = cobble.field()
+
+comment_range_start = CommentRangeStart
+
+
+@cobble.data
+class CommentRangeEnd(Element):
+    comment_id = cobble.field()
+
+comment_range_end = CommentRangeEnd
+
+class CommentRange(object):
+    def __init__(self, comment_id, start, end):
+        self.comment_id = comment_id
+        self.start = start
+        self.end = end
+
+    @property
+    def id(self):
+        return self.comment_id
+
+    def to_dict(self):
+        return {
+            "comment_id": self.comment_id,
+            "start": self.start,
+            "end": self.end,
+        }
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return self.to_dict()[key]
+        return (self.comment_id, self.start, self.end)[key]
+
+    def __iter__(self):
+        return iter((self.comment_id, self.start, self.end))
+
+    def __len__(self):
+        return 3
+
+    def __eq__(self, other):
+        if isinstance(other, CommentRange):
+            return (
+                self.comment_id == other.comment_id and
+                self.start == other.start and
+                self.end == other.end
+            )
+        if isinstance(other, dict):
+            return self.to_dict() == other
+        if isinstance(other, (tuple, list)):
+            return list(self) == list(other)
+        return NotImplemented
+
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __hash__(self):
+        return hash((self.comment_id, self.start, self.end))
+
+    def __repr__(self):
+        return "CommentRange(comment_id={0!r}, start={1!r}, end={2!r})".format(
+            self.comment_id,
+            self.start,
+            self.end,
+        )
+
+
+def comment_range(comment_id, start, end):
+    return CommentRange(comment_id, start, end)
+
+
+class CommentRanges(list):
+    def get(self, comment_id, default=None):
+        for range_ in self:
+            if range_.comment_id == comment_id:
+                return range_
+        return default
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list.__getitem__(self, key)
+        range_ = self.get(key)
+        if range_ is None:
+            raise KeyError(key)
+        return range_
+
+    def __contains__(self, key):
+        if isinstance(key, CommentRange):
+            return list.__contains__(self, key)
+        return self.get(key) is not None
+
+    def __repr__(self):
+        return "CommentRanges({0!r})".format(list(self))
+
+
+def comment_ranges(ranges=()):
+    return CommentRanges(ranges)
+
 
 def element_visitor(args):
     return cobble.visitor(Element, args=args)

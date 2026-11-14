@@ -3,7 +3,7 @@ import os
 
 import cobble
 
-from .. import results, lists, zips
+from .. import results, lists, zips, raw_text
 from .document_xml import read_document_xml_element
 from .content_types_xml import empty_content_types, read_content_types_xml_element
 from .relationships_xml import read_relationships_xml_element, Relationships
@@ -132,7 +132,7 @@ def _read_document(zip_file, read_part_with_body, notes, comments, part_paths):
             notes=notes,
             comments=comments,
         ),
-    )
+    ).map(raw_text.annotate_document_comments)
 
 
 def _part_with_body_reader(document_path, zip_file, part_paths, external_file_access):

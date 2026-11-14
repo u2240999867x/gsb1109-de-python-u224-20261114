@@ -67,8 +67,6 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         "w:sectPr",
         "w:proofErr",
         "w:lastRenderedPageBreak",
-        "w:commentRangeStart",
-        "w:commentRangeEnd",
         "w:del",
         "w:footnoteRef",
         "w:endnoteRef",
@@ -636,6 +634,12 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
     def read_comment_reference(element):
         return _success(documents.comment_reference(element.attributes["w:id"]))
 
+    def read_comment_range_start(element):
+        return _success(documents.comment_range_start(element.attributes["w:id"]))
+
+    def read_comment_range_end(element):
+        return _success(documents.comment_range_end(element.attributes["w:id"]))
+
     def alternate_content(element):
         return read_child_elements(element.find_child_or_null("mc:Fallback"))
 
@@ -723,6 +727,8 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         "w:footnoteReference": note_reference_reader("footnote"),
         "w:endnoteReference": note_reference_reader("endnote"),
         "w:commentReference": read_comment_reference,
+        "w:commentRangeStart": read_comment_range_start,
+        "w:commentRangeEnd": read_comment_range_end,
         "mc:AlternateContent": alternate_content,
         "w:sdt": read_sdt
     }

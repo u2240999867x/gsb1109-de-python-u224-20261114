@@ -146,6 +146,19 @@ with open("document.docx", "rb") as docx_file:
     messages = result.messages # Any messages
 ```
 
+To keep the ranges selected by comments,
+use `mammoth.extract_raw_text_with_comments`.
+Its text uses one newline per paragraph separator,
+and each comment has a half-open `start`/`end` range measured in Unicode code points:
+
+```python
+with open("document.docx", "rb") as docx_file:
+    result = mammoth.extract_raw_text_with_comments(docx_file)
+    text = result.value.text
+    for comment in result.value.comments:
+        print(comment.author_name, repr(text[comment.start:comment.end]))
+```
+
 
 #### Custom style map
 
@@ -339,6 +352,24 @@ Each paragraph is followed by two newlines.
 * Returns a result with the following properties:
 
   * `value`: the raw text
+
+  * `messages`: any messages, such as errors and warnings
+
+#### `mammoth.extract_raw_text_with_comments(fileobj)`
+
+Extract the plain text of the document together with the text selected by each comment.
+Each paragraph separator is a single newline,
+so offsets can be used directly to slice `result.value.text`.
+Comment ranges are half-open and measured in Unicode code points.
+Tabs and paragraph separators each count as one position.
+Comments may overlap, and a comment anchored only at a cursor has an empty range.
+
+* `fileobj`: a file-like object containing the source document.
+  Files should be opened in binary mode.
+
+* Returns a result with the following properties:
+
+  * `value`: the raw text, with `comments` and `comment_ranges` attributes
 
   * `messages`: any messages, such as errors and warnings
 

@@ -295,6 +295,12 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
         return html_path.wrap(nodes)
 
+    def visit_comment_range_start(self, comment_range_start, context):
+        return []
+
+    def visit_comment_range_end(self, comment_range_end, context):
+        return []
+
     def visit_comment(self, referenced_comment, context):
         label, comment = referenced_comment
         # TODO remove duplication with notes
