@@ -147,6 +147,53 @@ comparator functions instead of sort-key functions.
     even if it comes at the cost of slightly reduced functionality and performance.
     See the migration docs, if you are migrating from bibtexparser v1.
 
+.. _middleware_titles:
+
+Title Display and Search Forms
+::::::::::::::::::::::::::::::
+
+* :mod:`bibtexparser.middlewares.TitleFormsMiddleware`
+
+Catalogue and search applications need more than the raw LaTeX title: they
+need a human-readable display value, and a normalized key for retrieval.
+:class:`bibtexparser.middlewares.TitleFormsMiddleware` collects both when
+parsing, without changing the stored title, so that parsing and writing still
+round-trip the original BibTeX spelling:
+
+.. code-block:: python
+
+    import bibtexparser
+    from bibtexparser.middlewares import TitleFormsMiddleware, get_title_forms
+
+    library = bibtexparser.parse_string(
+        r"@article{k, title = {The {H2O} Molecule of M{\"u}ller}}",
+        append_middleware=[TitleFormsMiddleware()],
+    )
+    forms = get_title_forms(library.entries[0])
+    forms.raw          # 'The {H2O} Molecule of M{\"u}ller' (unchanged)
+    forms.display      # 'The H2O Molecule of Müller'
+    forms.search_key   # 'the h2o molecule of muller'
+
+* ``display`` decodes LaTeX commands and removes braces, keeps the case of
+  brace-protected content verbatim (so chemical formulas such as ``{H2O}`` and
+  acronyms are not changed) and title-cases the unprotected words.
+  ``protected_display`` re-wraps those protected ranges in braces and
+  ``protected_spans`` exposes them as offsets; pass
+  ``TitleFormsMiddleware(title_case=False)`` to keep the original wording.
+* ``raw`` is the analyzed field value; ``bibtex`` restores its value enclosing
+  so the title can be written back.
+* ``search_key`` is case- and accent-folded: ``M{\"u}ller``, ``M\"uller`` and
+  ``Müller`` produce the same key, as do Greek letters and their names.
+* Commands that cannot be decoded are listed in ``forms.unrecognized`` with
+  their range in the original value (``UnrecognizedCommand.span``, and
+  ``argument_span``/``full_span`` for attached arguments). They do not stop the
+  rest of the title, including later recognized accents, from being decoded and
+  indexed.
+
+For one-off conversions without a parse stack, use
+:func:`bibtexparser.collect_title_forms` or
+:func:`bibtexparser.normalize_search_key`.
+
 Write your own Middleware
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 

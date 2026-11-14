@@ -34,6 +34,13 @@ Full API
     :members:
 
 
+:mod:`bibtexparser.titles` --- Display and search forms of titles
+-----------------------------------------------------------------
+
+.. automodule:: bibtexparser.titles
+    :members: TitleForms, UnrecognizedCommand, collect_title_forms, normalize_search_key
+
+
 :mod:`bibtexparser.BibtexFormat` --- Formatting options for writer
 ------------------------------------------------------------------
 

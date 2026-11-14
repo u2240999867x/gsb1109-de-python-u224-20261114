@@ -18,6 +18,8 @@ from bibtexparser.middlewares.sorting_blocks import SortBlocksByTypeAndKeyMiddle
 from bibtexparser.middlewares.sorting_blocks import SortBlocksMiddleware
 from bibtexparser.middlewares.sorting_entry_fields import SortFieldsAlphabeticallyMiddleware
 from bibtexparser.middlewares.sorting_entry_fields import SortFieldsCustomMiddleware
+from bibtexparser.middlewares.titles import get_title_forms
+from bibtexparser.middlewares.titles import TitleFormsMiddleware
 
 from .parsestack import default_parse_stack
 from .parsestack import default_unparse_stack
@@ -46,6 +48,8 @@ __all__ = [
     "SortFieldsAlphabeticallyMiddleware",
     "SortFieldsCustomMiddleware",
     "SplitNameParts",
+    "TitleFormsMiddleware",
     "default_parse_stack",
     "default_unparse_stack",
+    "get_title_forms",
 ]
