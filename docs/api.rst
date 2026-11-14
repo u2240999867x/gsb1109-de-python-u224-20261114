@@ -276,6 +276,34 @@ Utilities
 ``bit_vector``
    A bit-level accessor for binary data. Import from ``pyais``.
 
+``ETAArchive``
+   An AIS voyage ETA together with every civil date compatible with it.
+   Build one with ``ETAArchive.from_ais(...)`` for raw month/day/hour/minute
+   fields, with ``ETAArchive.from_message(...)`` for a decoded message,
+   with ``ETAArchive.from_sentence(...)`` to also read the reception time from
+   a tag block or Gatehouse wrapper, or via ``MessageType5.eta_archive(...)``.
+   The archive keeps the reported precision (``precision``,
+   ``field_precision``), exposes ``candidates`` (sorted), ``civil_dates``,
+   ``years``, ``is_ambiguous`` and ``is_resolvable``, and serialises with
+   ``asdict()`` / ``to_json()`` / ``fromdict()``. Import from ``pyais``.
+
+``ETACandidate``
+   One possible civil date. Carries ``date``, ``precision`` and an inclusive
+   ``start`` / exclusive ``end`` interval; an hour precision candidate spans a
+   whole hour, a day precision candidate a whole day, and a month precision
+   candidate the whole month (one candidate per day of that month).
+
+``ETAPrecision``
+   Enum with values ``UNKNOWN``, ``MONTH``, ``DAY``, ``HOUR`` and ``MINUTE``.
+
+``resolve_eta(received_at=..., month=..., day=..., hour=..., minute=...,
+window_before=..., window_after=...)``
+   Convenience wrapper returning an ``ETAArchive``. Import from ``pyais``.
+
+``resolve_eta_candidates(...)``
+   Same arguments as ``resolve_eta``, returning only the candidate tuple.
+   Import from ``pyais``.
+
 ``compute_checksum(msg)``
    Compute the NMEA 0183 checksum for a message. Import from ``pyais.util``.
 

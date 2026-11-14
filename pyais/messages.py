@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Sequence, Union
 import attr
 
 from pyais.bit_vector import bit_vector, SUPPORTS_FAST_PATH, int_bit_vector, word_bit_vector
+from pyais.eta import ETAArchive, ETACandidate
 from pyais.constants import (
     AtoNDimensionType,
     AtoNRestrictedUseInidicator,
@@ -2199,6 +2200,46 @@ class MessageType5(Payload):
     destination = bit_field(120, str, default='')
     dte = bit_field(1, bool, default=0, signed=False)
     spare_1 = bit_field(1, bytes, default=b'', is_spare=True)
+
+    def eta_archive(
+        self,
+        received_at: datetime.datetime,
+        window_before: datetime.timedelta,
+        window_after: datetime.timedelta,
+    ) -> ETAArchive:
+        """Resolve the voyage ETA to every civil date compatible with it.
+
+        Type 5 carries an ETA without a year and with per-field "not available"
+        sentinels.  ``received_at`` is when the sentence was received and
+        ``window_before``/``window_after`` are the business window around
+        that time.  The returned :class:`~pyais.eta.ETAArchive` keeps every
+        candidate date instead of picking one.
+        """
+        return ETAArchive.from_ais(
+            received_at=received_at,
+            month=self.month,
+            day=self.day,
+            hour=self.hour,
+            minute=self.minute,
+            window_before=window_before,
+            window_after=window_after,
+        )
+
+    def eta_candidates(
+        self,
+        received_at: datetime.datetime,
+        window_before: datetime.timedelta,
+        window_after: datetime.timedelta,
+    ) -> typing.Tuple[ETACandidate, ...]:
+        """Return only the possible ETA dates for this message.
+
+        This is a shorthand for ``self.eta_archive(...).candidates``.
+        """
+        return self.eta_archive(
+            received_at=received_at,
+            window_before=window_before,
+            window_after=window_after,
+        ).candidates
 
 
 @attr.s(slots=True)

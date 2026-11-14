@@ -4,6 +4,7 @@ from pyais.stream import TCPConnection, FileReaderStream, IterMessages, Stream, 
 from pyais.encode import encode_dict, encode_msg, ais_to_nmea_0183
 from pyais.decode import decode
 from pyais.tracker import AISTracker, AISTrack
+from pyais.eta import ETAArchive, ETACandidate, ETAPrecision, resolve_eta, resolve_eta_candidates
 
 __license__ = 'MIT'
 __version__ = '3.4.0'
@@ -26,4 +27,9 @@ __all__ = (
     'decode',
     'AISTracker',
     'AISTrack',
+    'ETAArchive',
+    'ETACandidate',
+    'ETAPrecision',
+    'resolve_eta',
+    'resolve_eta_candidates',
 )

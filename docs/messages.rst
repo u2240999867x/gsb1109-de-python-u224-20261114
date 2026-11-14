@@ -328,9 +328,65 @@ Every decoded message has these methods:
       print(MessageType1.fields())
       # ('msg_type', 'repeat', 'mmsi', 'status', 'turn', 'speed', ...)
 
+Voyage ETA without a year
+-------------------------
+
+The ETA in a type 5 message is transmitted as four separate fields: month,
+day, hour and minute. It has no year, and each field has its own "not
+available" value (``0`` for month and day, ``24`` for hour and ``60`` for
+minute). For an archived sample, the reception time and a business window
+around it narrow the possible dates down.
+
+``ETAArchive.from_ais(...)`` and ``MessageType5.eta_archive(...)`` resolve the
+ETA to **every** civil date that is compatible with the record. The result
+never silently picks one candidate and keeps the reported precision:
+
+- a reported minute produces a one-minute candidate; a minute of ``60``
+  produces a one-hour candidate instead of a fabricated ``:00``
+- a reported hour produces a one-hour candidate; ``24`` produces a whole day
+- ``day = 0`` leaves month precision; every day of that month that overlaps
+  the window is a separate candidate, all tagged with month precision
+- ``month = 0`` produces no candidate at all (the ETA is unusable)
+
+Candidates are found by taking the calendar years touched by the window and
+keeping every candidate whose uncertainty interval overlaps it. This is what
+lets ``01-01`` received on 31 December resolve into the following year, and
+what makes a window wide enough to span two leap years return two distinct
+``29 February`` candidates instead of one.
+
+.. code-block:: python
+
+   import datetime
+   from pyais import decode
+
+   msg = decode(
+       "!AIVDM,2,1,1,A,55?MbV02;H;s<HtKR20EHE:0@T4@Dn2222222216L961O5Gf0NSQEp6ClRp8,0*1C",
+       "!AIVDM,2,2,1,A,88888888880,2*25",
+   )
+   archive = msg.eta_archive(
+       received_at=datetime.datetime(2025, 5, 15, 12, 0, tzinfo=datetime.timezone.utc),
+       window_before=datetime.timedelta(days=2),
+       window_after=datetime.timedelta(days=2),
+   )
+   archive.precision           # <ETAPrecision.MINUTE: 'minute'>
+   archive.civil_dates         # (datetime.date(2025, 5, 15),)
+   archive.is_ambiguous        # False
+   archive.candidates[0].start # 2025-05-15 14:00+00:00
+
+Every candidate has a ``date`` plus an inclusive ``start`` / exclusive ``end``
+interval that records the precision. ``asdict()`` and ``to_json()`` produce a
+JSON friendly record with the raw reported fields, the normalised fields, the
+window and all candidates. ``ETAArchive.fromdict()`` recomputes the candidates
+from that record, so the stored fields remain the single source of truth.
+
+``ETAArchive.from_message(msg, ...)`` applies the same rules to any message
+that carries the same month/day/hour/minute schedule, such as the berthing or
+area notice application messages. ``ETAArchive.from_sentence(sentence, ...)``
+also reads the reception time from a tag block ``c`` field or a Gatehouse
+wrapper, when one is present.
+
 Creating messages for encoding
 -------------------------------
-
 Use ``MessageType*.create()`` to create a message with defaults for missing fields:
 
 .. code-block:: python
