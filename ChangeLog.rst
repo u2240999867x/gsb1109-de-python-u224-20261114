@@ -1,6 +1,18 @@
 ﻿EXIF.py Change Log
 ##################
 
+Unreleased
+    * Add ``ExtractionOptions`` grouping the per-image extraction choices
+      (MakerNote, thumbnail, XMP, stop tag, key projection)
+    * Add a collection cache (``ExtractionCache`` / ``process_cached``) that
+      records how far each image scan reached: a fully traversed IFD is
+      complete evidence of tag absence, while an IFD stopped early is kept as
+      distinct truncated evidence
+    * On cache hits, narrow requests are projected without re-reading the
+      file; widening to a truncated IFD or a never-entered MakerNote
+      directory re-reads only the scopes with insufficient evidence
+    * Track complete vs. truncated IFDs in ``ExifHeader``
+
 3.5.1 — 2025-08-23
     * Don't raise exception from decode_maker_note() if strict==False (#243) by Nathan Olson
 

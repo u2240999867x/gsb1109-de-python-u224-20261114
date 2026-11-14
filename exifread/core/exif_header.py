@@ -4,7 +4,7 @@ Base classes.
 
 import re
 import struct
-from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
+from typing import Any, BinaryIO, Dict, List, Optional, Set, Tuple, Union
 
 from exifread.core.exceptions import ExifError
 from exifread.core.ifd_tag import IfdTag
@@ -65,6 +65,12 @@ class ExifHeader:
         self.detailed = detailed
         self.truncate_tags = truncate_tags
         self.tags: Dict[str, Any] = {}
+        # How far each IFD was actually read. The two sets are distinct
+        # states: a complete IFD is positive evidence of tag absence, while
+        # a truncated one only speaks for the entries reached before the scan
+        # stopped (stop tag, corrupted slice, unknown field type).
+        self.complete_ifds: Set[str] = set()
+        self.truncated_ifds: Set[str] = set()
 
     def s2n(self, offset: int, length: int, signed=False) -> int:
         """
@@ -289,7 +295,8 @@ class ExifHeader:
         tag_name: str,
         relative: bool,
         stop_tag: str,
-    ) -> None:
+    ) -> bool:
+        """Process one IFD entry. Return ``False`` when it had to be skipped."""
         field_type_id = self.s2n(entry + 2, 2)
         try:
             field_type = FieldType(field_type_id)
@@ -298,7 +305,7 @@ class ExifHeader:
                 raise ValueError(
                     "Unknown field type %d in tag 0x%04X" % (field_type_id, tag)
                 ) from err
-            return
+            return False
 
         # Not handled
         if field_type == FieldType.PROPRIETARY:
@@ -306,7 +313,7 @@ class ExifHeader:
                 raise ValueError(
                     "Unknown field type %d in tag 0x%04X" % (field_type_id, tag)
                 )
-            return
+            return False
 
         type_length = FIELD_DEFINITIONS[field_type][0]
         count = self.s2n(entry + 4, 4)
@@ -354,6 +361,7 @@ class ExifHeader:
         )
         tag_value = repr(self.tags[ifd_name + " " + tag_name])
         logger.debug(" %s: %s", tag_name, tag_value)
+        return True
 
     def dump_ifd(
         self,
@@ -362,8 +370,13 @@ class ExifHeader:
         tag_dict=None,
         relative=0,
         stop_tag=DEFAULT_STOP_TAG,
-    ) -> None:
-        """Return a list of entries in the given IFD."""
+    ) -> bool:
+        """
+        Return a list of entries in the given IFD.
+
+        :returns: ``True`` when the whole IFD was traversed, ``False`` when
+            the scan stopped before the last entry.
+        """
 
         # make sure we can process the entries
         if tag_dict is None:
@@ -372,8 +385,11 @@ class ExifHeader:
             entries = self.s2n(ifd, 2)
         except TypeError:
             logger.warning("Possibly corrupted IFD: %s", ifd_name)
-            return
+            # Nothing in this IFD can be trusted as a complete scan.
+            self.truncated_ifds.add(ifd_name)
+            return False
 
+        stopped_early = False
         for i in range(entries):
             # entry is index of start of this IFD in the file
             entry = ifd + 2 + 12 * i
@@ -388,12 +404,22 @@ class ExifHeader:
 
             # ignore certain tags for faster processing
             if not (not self.detailed and tag in IGNORE_TAGS):
-                self._process_tag(
+                if not self._process_tag(
                     ifd, ifd_name, tag_entry, entry, tag, tag_name, relative, stop_tag
-                )
+                ):
+                    # The entry could not be read, so nothing past it is
+                    # guaranteed: the IFD evidence is truncated.
+                    stopped_early = True
 
             if tag_name == stop_tag:
+                stopped_early = True
                 break
+
+        if stopped_early:
+            self.truncated_ifds.add(ifd_name)
+        else:
+            self.complete_ifds.add(ifd_name)
+        return not stopped_early
 
     def extract_tiff_thumbnail(self, thumb_ifd: int) -> None:
         """

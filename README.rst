@@ -205,6 +205,51 @@ For direct JSON serialization, combine this option with ``details=False`` to avo
         exifread.process_file(file_handle, details=False, builtin_types=True)
     )
 
+Extraction Options and Collection Caching
+=========================================
+
+When indexing a collection whose originals live on slow storage, the per-image
+extraction choices are grouped in an :class:`ExtractionOptions` object:
+
+.. code-block:: python
+
+    from exifread import ExtractionOptions, ExtractionCache, process_cached
+
+    options = ExtractionOptions(
+        details=True,        # enter the camera-private MakerNote directory
+        thumbnail=True,      # extract the embedded thumbnail
+        xmp=False,           # look for out-of-band XMP
+        stop_tag="UNDEF",    # stop an IFD once this tag is retrieved
+        tag_filter=None,     # project the answer to these "IFD TAG" keys
+    )
+
+``process_file`` accepts the same object, so the legacy keyword arguments
+(``details``, ``extract_thumbnail``, ``stop_tag``) remain valid.
+
+A cache records how far the scan of each image actually reached. An IFD read
+from its first entry to its last is *complete* evidence: a tag missing from it
+is genuinely absent. An IFD where the scan stopped early (a stop tag was hit
+or an entry could not be read) is *truncated* evidence, which is a distinct
+state — anything past the stopping point is unknown.
+
+.. code-block:: python
+
+    cache = ExtractionCache()
+    identity = exifread.file_identity(path)
+
+    with open(path, "rb") as file_handle:
+        tags = process_cached(identity, file_handle, options, cache=cache)
+
+On a later request the cache first runs a coverage check per image:
+
+* a narrower request (``tag_filter``) is projected straight out of the cached
+  tags without re-reading the file, including keys proven absent by a complete
+  IFD;
+* widening the request to a truncated IFD, or to the private MakerNote
+  directory a quick scan never entered, re-reads only the scopes with
+  insufficient evidence;
+* already cached thumbnails and XMP blocks are never fetched again.
+
 Usage Example
 =============
 
