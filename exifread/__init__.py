@@ -10,10 +10,46 @@ from exifread.core.exif_header import ExifHeader
 from exifread.core.find_exif import determine_type, get_endian_str
 from exifread.core.xmp import find_xmp_data
 from exifread.exif_log import get_logger
+from exifread.geometry import (
+    PixelRect,
+    PreviewTransform,
+    annotation_to_image_rect,
+    get_image_dimensions,
+    get_image_orientation,
+    image_rect_to_preview,
+    image_rect_to_preview_rect,
+    map_image_rect_to_preview,
+    map_preview_rect,
+    map_preview_rect_from_tags,
+    map_preview_rect_to_image,
+    preview_rect_to_image,
+    preview_rect_to_image_rect,
+    preview_transform,
+    restore_annotation,
+)
 from exifread.serialize import convert_types
 from exifread.tags import DEFAULT_STOP_TAG
 
 __version__ = "3.5.1"
+
+__all__ = [
+    "PixelRect",
+    "PreviewTransform",
+    "annotation_to_image_rect",
+    "get_image_dimensions",
+    "get_image_orientation",
+    "image_rect_to_preview",
+    "image_rect_to_preview_rect",
+    "map_image_rect_to_preview",
+    "map_preview_rect",
+    "map_preview_rect_from_tags",
+    "map_preview_rect_to_image",
+    "preview_rect_to_image",
+    "preview_rect_to_image_rect",
+    "preview_transform",
+    "process_file",
+    "restore_annotation",
+]
 
 logger = get_logger()
 

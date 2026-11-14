@@ -205,6 +205,61 @@ For direct JSON serialization, combine this option with ``details=False`` to avo
         exifread.process_file(file_handle, details=False, builtin_types=True)
     )
 
+Mapping Preview Annotations to the Original Image
+=================================================
+
+Previews are usually shown after applying ``Image Orientation`` and scaling the
+oriented image to fit the preview box. If the preview keeps its aspect ratio,
+the leftover space on one axis is padding ("letterboxing"). An annotation drawn
+on such a preview can be restored to the stored image with
+``exifread.map_preview_rect``:
+
+.. code-block:: python
+
+    import exifread
+
+    with open(path, "rb") as file_handle:
+        tags = exifread.process_file(file_handle, details=False)
+
+    # rect is (left, top, right, bottom) in preview pixels, right/bottom exclusive.
+    region = exifread.map_preview_rect(
+        rect,
+        tags,
+        preview_size=(preview_width, preview_height),
+    )
+
+``tags`` supplies both the orientation and the main image dimensions
+(``EXIF ExifImageWidth``/``ExifImageLength``). A path or binary file object can
+be passed instead. When the required tags are absent, the dimensions are read
+from the JPEG/PNG/TIFF header; if the geometry still cannot be determined, the
+size may be passed explicitly:
+
+.. code-block:: python
+
+    region = exifread.map_preview_rect(
+        rect,
+        orientation=6,
+        image_size=(image_width, image_height),
+        preview_size=(preview_width, preview_height),
+        # optional: scale=0.25, offset=(12, 0)
+    )
+
+Notes:
+
+- Preview coordinates are continuous and half-open: ``right`` and ``bottom``
+  are exclusive. The result is the smallest integer-pixel region in the stored
+  image that covers the transformed selection, returned as a ``PixelRect``
+  (``left``, ``top``, ``right``, ``bottom``; aliases ``x0/y0/x1/y1``).
+- The preview is scaled by the largest aspect-preserving factor that fits and
+  centred by default. Pass ``scale`` and/or ``offset`` when the preview uses a
+  different geometry.
+- An annotation entirely inside the padding returns ``None``. An annotation on
+  the right or bottom boundary is clipped to the image and does not grow by an
+  extra pixel.
+- All eight EXIF orientations (including the mirrored ones that swap the axes)
+  are supported. ``exifread.image_rect_to_preview`` performs the inverse
+  projection, which is useful for verifying round trips.
+
 Usage Example
 =============
 
