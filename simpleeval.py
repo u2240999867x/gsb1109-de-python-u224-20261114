@@ -390,8 +390,52 @@ class MultipleExpressions(UserWarning):
     """Only the first expression parsed will be used"""
 
 
+class UnknownDependent(InvalidExpression):
+    """A ternary-mode expression cannot be decided yet.
+
+    Raised when one or more names are missing and the result of the
+    expression depends on them.  ``unknown_names`` lists only the missing
+    names that were actually evaluated while working out the result - names
+    sitting behind a short-circuited branch are not included.
+    """
+
+    def __init__(self, unknown_names):
+        self.unknown_names = tuple(unknown_names)
+        self.message = (
+            "Expression result is unknown because these names are not defined: "
+            + ", ".join(self.unknown_names)
+        )
+        super().__init__(self.message)
+
+
 # Sentinal used during attr access
 _ATTR_NOT_FOUND = object()
+
+
+class Unknown:
+    """Marker for an undecidable value in ternary (three-valued) mode.
+
+    Only one instance ever exists, the module level ``unknown`` singleton,
+    so comparisons should always use ``is``/``is not``.  Its truthiness is
+    deliberately undefined so it can never silently pass a plain boolean
+    check outside the ternary-aware operators.
+    """
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __bool__(self):
+        raise TypeError("Boolean value of Unknown is not defined")
+
+    def __repr__(self):
+        return "<Unknown>"
+
+
+unknown = Unknown()
 
 
 class ModuleWrapper:
@@ -547,10 +591,18 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
 
     expr = ""
 
-    def __init__(self, operators=None, functions=None, names=None, allowed_attrs=None):
+    def __init__(
+        self, operators=None, functions=None, names=None, allowed_attrs=None, ternary=False
+    ):
         """
         Create the evaluator instance.  Set up valid operators (+,-, etc)
-        functions (add, random, get_val, whatever) and names."""
+        functions (add, random, get_val, whatever) and names.
+
+        When ``ternary`` is True, missing names do not raise ``NameNotDefined``:
+        they resolve to the ``unknown`` marker and boolean ``and``/``or`` use
+        Kleene (three-valued) logic.  If an expression's result can still be
+        decided without them, it is; otherwise eval() raises
+        ``UnknownDependent`` carrying the names that actually mattered."""
 
         if operators is None:
             operators = DEFAULT_OPERATORS.copy()
@@ -563,6 +615,12 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
         self.functions = functions
         self.names = names
         self.allowed_attrs = allowed_attrs
+        self.ternary = ternary
+
+        # Names that resolved to 'unknown' during the current eval() run.
+        # Only names genuinely evaluated end up here - short-circuited or
+        # otherwise untouched branches are never visited.
+        self._unknown_names = []
 
         self.nodes = {
             ast.Expr: self._eval_expr,
@@ -659,8 +717,14 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
 
         # set a copy of the expression aside, so we can give nice errors...
         self.expr = expr
+        self._unknown_names = []
 
-        return self._eval(previously_parsed or self.parse(expr))
+        result = self._eval(previously_parsed or self.parse(expr))
+
+        if self.ternary and result is unknown:
+            raise UnknownDependent(self._unknown_names)
+
+        return result
 
     def _eval(self, node):
         """The internal evaluator used on each node in the parsed tree."""
@@ -720,50 +784,130 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
             operator = self.operators[type(node.op)]
         except KeyError:
             raise OperatorNotDefined(node.op, self.expr)
-        return operator(self._eval(node.operand))
+        operand = self._eval(node.operand)
+        if self.ternary and operand is unknown:
+            if isinstance(node.op, ast.Not):
+                return unknown
+        return operator(operand)
 
     def _eval_binop(self, node):
         try:
             operator = self.operators[type(node.op)]
         except KeyError:
             raise OperatorNotDefined(node.op, self.expr)
-        return operator(self._eval(node.left), self._eval(node.right))
+        left = self._eval(node.left)
+        right = self._eval(node.right)
+        if self.ternary and (left is unknown or right is unknown):
+            return unknown
+        return operator(left, right)
 
     def _eval_boolop(self, node):
-        to_return = False
-        if isinstance(node.op, ast.And):
-            for value in node.values:
-                to_return = self._eval(value)
-                if not to_return:
-                    break
-        elif isinstance(node.op, ast.Or):
-            for value in node.values:
-                to_return = self._eval(value)
-                if to_return:
-                    break
+        if not self.ternary:
+            to_return = False
+            if isinstance(node.op, ast.And):
+                for value in node.values:
+                    to_return = self._eval(value)
+                    if not to_return:
+                        break
+            elif isinstance(node.op, ast.Or):
+                for value in node.values:
+                    to_return = self._eval(value)
+                    if to_return:
+                        break
+            return to_return
+
+        return self._eval_boolop_ternary(node)
+
+    def _eval_boolop_ternary(self, node):
+        """Kleene three-valued ``and``/``or``.
+
+        A definite result short-circuits exactly like normal python: once a
+        value settles the expression, later values (and any name lookups or
+        function calls inside them) are never evaluated.  Only when no definite
+        answer is possible does the ``unknown`` marker bubble up instead.
+        """
+        is_and = isinstance(node.op, ast.And)
+        saw_unknown = False
+        to_return = unknown
+
+        for value in node.values:
+            result = self._eval(value)
+
+            if result is unknown:
+                saw_unknown = True
+                continue
+
+            if is_and:
+                # False (and friends) settles an 'and' immediately;
+                # truthy values are carried over in case everything is truthy.
+                if not result:
+                    return result
+            elif result:
+                # any truthy value settles an 'or' immediately.
+                return result
+
+            to_return = result
+
+        if saw_unknown:
+            return unknown
         return to_return
 
     def _eval_compare(self, node):
+        if not self.ternary:
+            right = self._eval(node.left)
+            to_return = True
+            for operation, comp in zip(node.ops, node.comparators):
+                if not to_return:
+                    break
+                left = right
+                right = self._eval(comp)
+                to_return = self.operators[type(operation)](left, right)
+            return to_return
+
+        # Chained comparisons behave like an implicit 'and': one definite
+        # False settles the whole chain, while unknowns only make the result
+        # unknown if no definite False is found.  Comparison operators are
+        # never handed the unknown marker.
         right = self._eval(node.left)
+        saw_unknown = False
         to_return = True
+
         for operation, comp in zip(node.ops, node.comparators):
-            if not to_return:
-                break
             left = right
             right = self._eval(comp)
+
+            if left is unknown or right is unknown:
+                saw_unknown = True
+                continue
+
             to_return = self.operators[type(operation)](left, right)
-        return to_return
+            if not to_return:
+                return to_return
+
+        return unknown if saw_unknown else to_return
 
     def _eval_ifexp(self, node):
+        if self.ternary:
+            test = self._eval(node.test)
+            if test is unknown:
+                # Neither branch can be picked, so neither may be evaluated.
+                return unknown
+            return self._eval(node.body) if test else self._eval(node.orelse)
         return self._eval(node.body) if self._eval(node.test) else self._eval(node.orelse)
 
     def _eval_call(self, node):
         if isinstance(node.func, ast.Attribute):
             func = self._eval(node.func)
+            if self.ternary and func is unknown:
+                return unknown
         else:
             try:
                 func = self.functions[node.func.id]
             except KeyError:
+                if self.ternary:
+                    if node.func.id not in self._unknown_names:
+                        self._unknown_names.append(node.func.id)
+                    return unknown
                 raise FunctionNotDefined(node.func.id, self.expr)
             except AttributeError:
                 raise FeatureNotAvailable("Lambda Functions not implemented")
@@ -771,9 +915,15 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
             if func in DISALLOW_FUNCTIONS:
                 raise FeatureNotAvailable("This function is forbidden")
 
-        return func(
-            *(self._eval(a) for a in node.args), **dict(self._eval(k) for k in node.keywords)
-        )
+        args = [self._eval(a) for a in node.args]
+        kwargs = dict(self._eval(k) for k in node.keywords)
+
+        if self.ternary and (unknown in args or unknown in kwargs.values()):
+            # A data-fetching function must never be called with an unknown
+            # input; the names involved were already recorded on access.
+            return unknown
+
+        return func(*args, **kwargs)
 
     def _eval_keyword(self, node):
         return node.arg, self._eval(node.value)
@@ -803,11 +953,18 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
         if node.id in self.functions:
             return self.functions[node.id]
 
+        if self.ternary:
+            if node.id not in self._unknown_names:
+                self._unknown_names.append(node.id)
+            return unknown
+
         raise NameNotDefined(node.id, self.expr)
 
     def _eval_subscript(self, node):
         container = self._eval(node.value)
         key = self._eval(node.slice)
+        if self.ternary and (container is unknown or key is unknown):
+            return unknown
         # Currently if there's a KeyError, that gets raised straight up.
         # TODO: Should that be wrapped in an InvalidExpression?
         return container[key]
@@ -827,6 +984,9 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
 
         # Evaluate "node" - the thing that we're trying to access an attr of first:
         node_evaluated = self._eval(node.value)
+
+        if self.ternary and node_evaluated is unknown:
+            return unknown
 
         # If we've opted in to the 'allowed_attrs' checking per type, then since we now
         # know what kind of node we've got, we can check if we're permitted to access this
@@ -885,17 +1045,23 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
         length = 0
         evaluated_values = []
         for n in node.values:
-            val = str(self._eval(n))
+            val = self._eval(n)
+            if self.ternary and val is unknown:
+                return unknown
+            val = str(val)
             if len(val) + length > MAX_STRING_LENGTH:
                 raise IterableTooLong("Sorry, I will not evaluate something this long.")
             evaluated_values.append(val)
         return "".join(evaluated_values)
 
     def _eval_formattedvalue(self, node):
+        value = self._eval(node.value)
+        if self.ternary and value is unknown:
+            return unknown
         if node.format_spec:
             fmt = "{:" + self._eval(node.format_spec) + "}"
-            return fmt.format(self._eval(node.value))
-        return self._eval(node.value)
+            return fmt.format(value)
+        return value
 
 
 class EvalWithCompoundTypes(SimpleEval):
@@ -906,8 +1072,10 @@ class EvalWithCompoundTypes(SimpleEval):
 
     _max_count = 0
 
-    def __init__(self, operators=None, functions=None, names=None, allowed_attrs=None):
-        super().__init__(operators, functions, names, allowed_attrs)
+    def __init__(
+        self, operators=None, functions=None, names=None, allowed_attrs=None, ternary=False
+    ):
+        super().__init__(operators, functions, names, allowed_attrs, ternary)
 
         self.functions.update(list=list, tuple=tuple, dict=dict, set=set)
 
@@ -934,9 +1102,16 @@ class EvalWithCompoundTypes(SimpleEval):
         for key, value in zip(node.keys, node.values):
             if key is None:
                 # "{**x}" gets parsed as a key-value pair of (None, Name(x))
-                result.update(self._eval(value))
+                unpacked = self._eval(value)
+                if self.ternary and unpacked is unknown:
+                    return unknown
+                result.update(unpacked)
             else:
-                result[self._eval(key)] = self._eval(value)
+                dict_key = self._eval(key)
+                dict_value = self._eval(value)
+                if self.ternary and (dict_key is unknown or dict_value is unknown):
+                    return unknown
+                result[dict_key] = dict_value
 
         return result
 
@@ -945,17 +1120,28 @@ class EvalWithCompoundTypes(SimpleEval):
 
         for item in node.elts:
             if isinstance(item, ast.Starred):
-                result.extend(self._eval(item.value))
+                value = self._eval(item.value)
+                if self.ternary and value is unknown:
+                    return unknown
+                result.extend(value)
             else:
                 result.append(self._eval(item))
 
+        if self.ternary and unknown in result:
+            return unknown
         return result
 
     def _eval_tuple(self, node):
-        return tuple(self._eval(x) for x in node.elts)
+        result = tuple(self._eval(x) for x in node.elts)
+        if self.ternary and unknown in result:
+            return unknown
+        return result
 
     def _eval_set(self, node):
-        return {self._eval(x) for x in node.elts}
+        result = {self._eval(x) for x in node.elts}
+        if self.ternary and unknown in result:
+            return unknown
+        return result
 
     def _eval_comprehension(self, node):
         if isinstance(node, ast.DictComp):
@@ -988,37 +1174,67 @@ class EvalWithCompoundTypes(SimpleEval):
                 for t, v in zip(target.elts, value):
                     recurse_targets(t, v)
 
+        def passes(conditions):
+            for iff in conditions:
+                condition = self._eval(iff)
+                if self.ternary and condition is unknown:
+                    # an unknown filter neither includes nor excludes the item
+                    return unknown
+                if not condition:
+                    return False
+            return True
+
         def do_generator(gi=0):
             g = node.generators[gi]
-            for i in self._eval(g.iter):
+            iterable = self._eval(g.iter)
+            if self.ternary and iterable is unknown:
+                return unknown
+            for i in iterable:
                 self._max_count += 1
 
                 if self._max_count > MAX_COMPREHENSION_LENGTH:
                     raise IterableTooLong("Comprehension generates too many elements")
                 recurse_targets(g.target, i)
-                if all(self._eval(iff) for iff in g.ifs):
-                    if len(node.generators) > gi + 1:
-                        do_generator(gi + 1)
-                    else:
-                        if isinstance(to_return, dict):
-                            to_return[self._eval(node.key)] = self._eval(node.value)
-                        elif isinstance(to_return, list):
-                            to_return.append(self._eval(node.elt))
+                verdict = passes(g.ifs)
+                if verdict is unknown:
+                    return unknown
+                if not verdict:
+                    continue
+                if len(node.generators) > gi + 1:
+                    if do_generator(gi + 1) is unknown:
+                        return unknown
+                elif isinstance(to_return, dict):
+                    key = self._eval(node.key)
+                    value = self._eval(node.value)
+                    if self.ternary and (key is unknown or value is unknown):
+                        return unknown
+                    to_return[key] = value
+                else:
+                    element = self._eval(node.elt)
+                    if self.ternary and element is unknown:
+                        return unknown
+                    to_return.append(element)
+            return True
 
         try:
-            do_generator()
+            verdict = do_generator()
         finally:
             self.nodes.update({ast.Name: previous_name_evaller})
 
+        if self.ternary and verdict is unknown:
+            return unknown
         return to_return
 
 
-def simple_eval(expr, operators=None, functions=None, names=None, allowed_attrs=None):
+def simple_eval(
+    expr, operators=None, functions=None, names=None, allowed_attrs=None, ternary=False
+):
     """Simply evaluate an expression"""
     s = SimpleEval(
         operators=operators,
         functions=functions,
         names=names,
         allowed_attrs=allowed_attrs,
+        ternary=ternary,
     )
     return s.eval(expr)

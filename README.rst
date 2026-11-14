@@ -219,6 +219,48 @@ which, of course, can be nested:
     'c'
 
 
+Three-valued (ternary) filtering
+--------------------------------
+
+Normally a missing name raises ``NameNotDefined``.  When cleaning records you
+often want to distinguish an explicit ``False`` in a column (for example a
+discount-eligibility flag that was genuinely supplied as false) from a column
+that is simply absent and needs to be backfilled later.  Passing
+``ternary=True`` switches the evaluator to three-valued (Kleene) logic:
+
+.. code-block:: pycon
+
+    >>> from simpleeval import simple_eval, UnknownDependent
+    >>> # explicit False is a definite result:
+    >>> simple_eval("eligible and amount > 100",
+                    names={"eligible": False}, ternary=True)
+    False
+    >>> # a missing column makes the result undecidable:
+    >>> simple_eval("eligible and amount > 100",
+                    names={"amount": 200}, ternary=True)
+    Traceback (most recent call last):
+        ...
+    simpleeval.UnknownDependent: Expression result is unknown because these names are not defined: eligible
+
+The exception's ``unknown_names`` tuple names exactly the missing fields that
+were actually evaluated to reach the result - fields sitting behind a
+short-circuited branch (and therefore never visited) are not reported.
+
+The boolean operators keep normal python's short-circuiting while adding an
+``unknown`` state, so anything that is already settled stays settled:
+
+- ``unknown and False`` (and ``False and anything``) is definitely ``False``.
+- ``unknown or True`` (and ``True or anything``) is definitely ``True``.
+- ``unknown and True`` and ``unknown or False`` stay unknown.
+
+Once a result is settled, the remaining values are not evaluated, so any
+name lookups or function calls inside them never happen.  A function is also
+never called when one of its evaluated arguments is unknown; the ``unknown``
+marker propagates out instead.  Chained comparisons and ``not`` follow the
+same rules.  The default (``ternary=False``) behaviour is unchanged - missing
+names still raise ``NameNotDefined`` as before.
+
+
 Functions
 ---------
 
