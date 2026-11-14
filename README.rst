@@ -170,6 +170,24 @@ bzip2 and xz compression methods do not store timestamps in the file headers,
 so output from them is also reproducible.
 
 
+Recovering striped volumes
+--------------------------
+
+The ``xopen.recovery`` module reassembles a stream that was interleaved into
+several compressed volumes, using a handover manifest and an optional
+byte-wise XOR parity volume::
+
+    python -m xopen.recovery handover.json -o original.bin \
+        --report report.json --segments segments.tsv
+
+The manifest is JSON and describes the stripe length, the volume order and the
+true length of the final volume.  Each volume may carry a whole-volume
+``sha256`` and per-block ``block_sha256`` checksums.  The command writes the
+reconstructed stream plus a report that labels every segment as ``direct``
+(read from a volume), ``parity`` (rebuilt from XOR) or ``unknown`` (not
+provable).  ``python -m xopen.recovery --help`` lists the available options.
+
+
 Zstandard support
 -----------------
 
