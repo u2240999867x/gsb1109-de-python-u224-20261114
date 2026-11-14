@@ -530,6 +530,75 @@ are always blocked, even if not using an allowlist:
 If you really really need that - you can make your own wrappers and overrides.
 But I advise against it.
 
+Planning Minimal Reclassification Edits
+---------------------------------------
+
+``ClassificationPlanner`` answers "what is the cheapest set of field edits that
+moves this record into a target category?" when categories are defined by a
+set of independent expressions and each editable field has a finite set of
+candidate values with a change cost.
+
+.. code-block:: pycon
+
+    >>> from simpleeval import ClassificationPlanner
+    >>> planner = ClassificationPlanner(
+    ...     rules={
+    ...         "fresh": "shelf_life <= 7",
+    ...         "bulk": ["weight >= 20", "units >= 12"],
+    ...         "standard": "shelf_life > 7 and weight < 20",
+    ...     },
+    ...     candidates={
+    ...         "shelf_life": [3, 7, 14, 30],
+    ...         "weight": [5, 20, 30],
+    ...         "units": [1, 6, 12],
+    ...     },
+    ...     costs={"shelf_life": 2, "weight": 3, "units": 1},
+    ...     locked=("sku",),
+    ...     derived={"total_weight": "weight * pack_size"},
+    ... )
+    >>> plan = planner.solve(
+    ...     {"sku": "A-100", "shelf_life": 30, "weight": 5, "units": 6, "pack_size": 2},
+    ...     "fresh",
+    ... )
+    >>> plan.cost, [dict(solution.changes) for solution in plan.solutions]
+    (2, [{"shelf_life": 3}, {"shelf_life": 7}])
+
+Each category matches when all of its expressions are truthy.  By default
+(``exclusive=True``) a solution must be the target category's *only* match, so
+ambiguous records are handled correctly.  Set ``exclusive=False`` to allow a
+target category to overlap with others.
+
+What the planner guarantees:
+
+* **Locks are absolute.**  Fields in ``locked`` are never edited, and their
+  original values stay in every returned record.
+* **Derived columns are recomputed.**  ``derived`` expressions are evaluated in
+  order for every candidate combination, so rules see the recomputed values.
+  ``plan.rebuild(record)`` exposes this recomputation directly.
+* **The search is exhaustive.**  Every combination of candidates is considered
+  (the original value is a free option, even if it is not listed).  All
+  solutions tied for the lowest exact cost are returned, and costs are kept as
+  ``Fraction`` values so that decimal inputs do not introduce tie-breaking
+  errors.
+* **Joint edits are found.**  Nothing assumes a single-field fix: if a
+  classification only changes when two fields are edited together, that
+  combination is part of the search space and will be returned.
+* **No false negatives.**  An empty ``solutions`` tuple means the exhausted
+  search found no fix.  If the space exceeds ``max_combinations``,
+  ``PlanningLimitExceeded`` is raised instead of reporting "no solution".
+
+Cost specification is flexible: a number applies to any change of that field;
+a mapping gives a per-value cost (unlisted values use ``default_cost``); a
+callable receives ``(field, value)``; and omitted fields use ``default_cost``.
+
+Rule and derived expressions can also be callables receiving the working
+record dict, e.g. ``rules={"x": lambda r: r["a"] + r["b"] > 10}``.  By default
+an expression that raises (for example a missing column) counts as
+non-matching; pass ``on_rule_error="raise"`` to surface those errors.
+
+``plan.as_dict()`` returns a JSON-friendly summary of the target, status,
+cost, and every tied solution with its full rebuilt record.
+
 Other...
 --------
 

@@ -110,12 +110,18 @@ well:
 from __future__ import annotations
 
 import ast
+import math
 import operator as op
 import os
 import sys
 import types
 import warnings
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from decimal import Decimal
+from fractions import Fraction
 from random import random
+from typing import Any
 
 ########################################
 # Module wide 'globals'
@@ -1022,3 +1028,518 @@ def simple_eval(expr, operators=None, functions=None, names=None, allowed_attrs=
         allowed_attrs=allowed_attrs,
     )
     return s.eval(expr)
+
+
+########################################
+# Minimal-change classification planning:
+
+_PLAN_ABSENT = object()
+
+
+class PlanningLimitExceeded(InvalidExpression):
+    """Raised when the candidate space is too large to search exhaustively.
+
+    Classification planning never reports a false "no solution": if the
+    complete space cannot be visited, this exception is raised instead.
+    """
+
+
+class UnknownCategory(KeyError, InvalidExpression):
+    """Raised when a requested target category has no rule."""
+
+    def __str__(self):
+        return f"Unknown category: {self.args[0]!r}"
+
+
+@dataclass(frozen=True)
+class FixSolution:
+    """One minimal-cost way to make a record match a target category.
+
+    ``changes`` contains only the editable fields whose values differ from
+    the input record.  ``record`` is the complete rebuilt record, including
+    every derived column recomputed from the changed inputs.
+    """
+
+    changes: Mapping[str, Any]
+    record: Mapping[str, Any]
+    cost: Fraction
+
+    @property
+    def changed_fields(self) -> tuple[str, ...]:
+        return tuple(self.changes)
+
+
+@dataclass(frozen=True)
+class FixPlan:
+    """The result of a minimal-change classification search."""
+
+    target: str
+    solutions: tuple[FixSolution, ...]
+    cost: Fraction | None
+    searched: int
+    initial_categories: tuple[str, ...] = ()
+    status: str = "no_solution"
+
+    @property
+    def has_solution(self) -> bool:
+        return bool(self.solutions)
+
+    @property
+    def is_ambiguous_initial_record(self) -> bool:
+        return len(self.initial_categories) > 1
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a plain, JSON-friendly summary (costs become int/float)."""
+        return {
+            "target": self.target,
+            "status": self.status,
+            "cost": None if self.cost is None else _fraction_to_plain(self.cost),
+            "searched": self.searched,
+            "initial_categories": list(self.initial_categories),
+            "solutions": [
+                {
+                    "changes": dict(solution.changes),
+                    "cost": _fraction_to_plain(solution.cost),
+                    "record": dict(solution.record),
+                }
+                for solution in self.solutions
+            ],
+        }
+
+
+def _fraction_to_plain(value: Fraction) -> int | float:
+    return value.numerator if value.denominator == 1 else float(value)
+
+
+class ClassificationPlanner:
+    """Find minimal field edits that move a record into a target category.
+
+    Classification is defined by one or more independent expressions per
+    category.  For example::
+
+        planner = ClassificationPlanner(
+            rules={
+                "perishable": "shelf_life_days <= 7",
+                "bulk": ["weight_kg >= 20", "units >= 12"],
+            },
+            candidates={
+                "shelf_life_days": [3, 7, 30],
+                "weight_kg": [5, 20],
+                "units": [1, 12],
+            },
+            costs={"shelf_life_days": 2, "weight_kg": 3, "units": 1},
+            locked=("sku",),
+            derived={"total_units": "units * pack_size"},
+        )
+        plan = planner.solve(record, "perishable")
+
+    A category matches when every expression listed for it is truthy.  With
+    ``exclusive=True`` (the default) a solution is accepted only if the target
+    is the *only* matching category, so records that currently match several
+    categories (or none) are handled correctly.
+
+    ``candidates`` maps each editable field to its finite candidate values.  A
+    mapping of ``value -> cost`` is also accepted and supplies that field's
+    per-value costs directly.  The original value is always a free option,
+    even when it is absent from the candidate list.  ``costs`` may be:
+
+    * a number per field: the cost of any change to that field;
+    * a mapping per field: the cost of each candidate value (values not
+      listed fall back to ``default_cost``);
+    * a callable ``cost(field, value)``;
+    * omitted, in which case every changed field costs ``default_cost``.
+
+    ``locked`` fields are never edited, even if they appear in ``candidates``.
+    ``derived`` maps column names to expressions (or callables receiving the
+    working record); they are evaluated in insertion order after every edit,
+    so classification always sees recomputed columns.  Derived names cannot
+    also be editable fields.
+
+    The search is exhaustive: every combination is considered (subject only
+    to ``max_combinations``) and all solutions tied for the lowest exact cost
+    are returned.  In particular, changes that only alter the category when
+    applied together are found; no single-field shortcut is used.
+    """
+
+    def __init__(
+        self,
+        rules,
+        candidates,
+        costs=None,
+        *,
+        locked=(),
+        derived=None,
+        default_cost=1,
+        exclusive=True,
+        on_rule_error="ignore",
+        evaluator=None,
+        max_combinations=1_000_000,
+    ):
+        if on_rule_error not in ("ignore", "raise"):
+            raise ValueError("on_rule_error must be 'ignore' or 'raise'")
+        if type(max_combinations) is not int or max_combinations < 1:
+            raise ValueError("max_combinations must be a positive integer")
+        if not isinstance(candidates, Mapping):
+            raise TypeError("candidates must be a mapping of field name -> values")
+        if costs is not None and not (isinstance(costs, Mapping) or callable(costs)):
+            raise TypeError("costs must be a mapping, a callable, or None")
+        if not isinstance(locked, (str, Sequence, set, frozenset)):
+            raise TypeError("locked must be a collection of field names")
+
+        self.exclusive = bool(exclusive)
+        self.on_rule_error = on_rule_error
+        self.max_combinations = max_combinations
+        self.default_cost = _as_cost(default_cost, "default_cost", None)
+        self.evaluator = EvalWithCompoundTypes() if evaluator is None else evaluator
+        self.derived = _normalize_derived(derived)
+        self.locked = frozenset((locked,) if isinstance(locked, str) else locked)
+        self.candidates = {}
+        self._candidate_costs: dict[str, dict[Any, Any]] = {}
+        self._candidate_order: list[str] = []
+
+        for field_name, values in candidates.items():
+            if not isinstance(field_name, str):
+                raise TypeError("candidate field names must be strings")
+            if isinstance(values, Mapping):
+                # Mapping form: candidate value -> its change cost.
+                self._candidate_costs[field_name] = dict(values)
+                values = tuple(values)
+            elif isinstance(values, (str, bytes)) or not isinstance(values, Iterable):
+                raise TypeError(f"candidates for {field_name!r} must be an iterable")
+            values = tuple(values)
+            self.candidates[field_name] = values
+            self._candidate_order.append(field_name)
+
+        derived_names = set(self.derived)
+        derived_locked = derived_names.intersection(self.candidates)
+        if derived_locked:
+            raise ValueError(
+                "derived columns cannot also be editable fields: "
+                + ", ".join(sorted(derived_locked))
+            )
+        for field_name in self.locked:
+            if not isinstance(field_name, str):
+                raise TypeError("locked field names must be strings")
+        for name in derived_names:
+            if name in self.locked:
+                raise ValueError(f"derived column {name!r} cannot be locked")
+
+        self.costs = costs
+        self.rules: dict[str, tuple[tuple, ...]] = _normalize_rules(rules, self.evaluator)
+        if not self.rules:
+            raise ValueError("at least one classification rule is required")
+
+    # ----- public helpers -------------------------------------------------
+
+    def rebuild(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """Return a copy of ``record`` with all derived columns recomputed."""
+        if not isinstance(record, Mapping):
+            raise TypeError("record must be a mapping")
+        rebuilt = dict(record)
+        env = dict(rebuilt)
+        for name, spec in self.derived.items():
+            value = self._evaluate_spec(spec, env, field=name)
+            rebuilt[name] = value
+            env[name] = value
+        return rebuilt
+
+    def categories(self, record: Mapping[str, Any]) -> tuple[str, ...]:
+        """Return every category whose rules match the record, in rule order.
+
+        Derived columns are recomputed first.  A rule expression that cannot
+        be evaluated counts as non-matching when ``on_rule_error='ignore'``.
+        """
+        rebuilt = self.rebuild(record)
+        env = dict(rebuilt)
+        matched = []
+        for category, predicates in self.rules.items():
+            if all(self._predicate_matches(predicate, env) for predicate in predicates):
+                matched.append(category)
+        return tuple(matched)
+
+    def classify(self, record: Mapping[str, Any]) -> str | None:
+        """Return the record's single category, or ``None`` if ambiguous."""
+        categories = self.categories(record)
+        return categories[0] if len(categories) == 1 else None
+
+    def solve(self, record: Mapping[str, Any], target: str) -> FixPlan:
+        """Return all lowest-cost edits that make ``record`` match ``target``.
+
+        The input record is never mutated.  ``FixPlan.status`` is
+        ``'solved'`` when one or more solutions exist, otherwise
+        ``'no_solution'``.
+        """
+        if not isinstance(record, Mapping):
+            raise TypeError("record must be a mapping")
+        if target not in self.rules:
+            raise UnknownCategory(target)
+
+        original = dict(record)
+        initial_categories = self.categories(original)
+        domains = [
+            self._build_domain(field_name, original)
+            for field_name in self._candidate_order
+            if field_name not in self.locked
+        ]
+
+        best_cost: Fraction | None = None
+        solutions: list[FixSolution] = []
+        searched = 0
+        selected: list[tuple[str, Any]] = []
+
+        def visit(index: int, running_cost: Fraction):
+            nonlocal best_cost, searched
+
+            if best_cost is not None and running_cost > best_cost:
+                return
+            if index == len(domains):
+                searched += 1
+                if searched > self.max_combinations:
+                    raise PlanningLimitExceeded(
+                        "Classification candidate space exceeds "
+                        f"max_combinations={self.max_combinations}"
+                    )
+                rebuilt = self._rebuild_with_changes(original, selected)
+                if not self._matches_target(rebuilt, target):
+                    return
+                if best_cost is None or running_cost < best_cost:
+                    best_cost = running_cost
+                    solutions.clear()
+                if running_cost == best_cost:
+                    solutions.append(
+                        FixSolution(
+                            changes=dict(selected),
+                            record=rebuilt,
+                            cost=running_cost,
+                        )
+                    )
+                return
+
+            field_name, options = domains[index]
+            for value, cost, changed in options:
+                if changed:
+                    selected.append((field_name, value))
+                visit(index + 1, running_cost + cost)
+                if changed:
+                    selected.pop()
+
+        visit(0, Fraction(0))
+
+        if not solutions:
+            return FixPlan(
+                target=target,
+                solutions=(),
+                cost=None,
+                searched=searched,
+                initial_categories=initial_categories,
+                status="no_solution",
+            )
+        return FixPlan(
+            target=target,
+            solutions=tuple(solutions),
+            cost=best_cost,
+            searched=searched,
+            initial_categories=initial_categories,
+            status="solved",
+        )
+
+    # ----- internals ------------------------------------------------------
+
+    def _build_domain(self, field_name: str, original: dict[str, Any]):
+        values = self.candidates[field_name]
+        present = field_name in original
+        original_value = original[field_name] if present else _PLAN_ABSENT
+
+        options = [(original_value, Fraction(0), False)]
+        for value in values:
+            if present and _values_equal(value, original_value):
+                continue
+            if any(_values_equal(value, existing) for existing, _, _ in options):
+                continue
+            options.append((value, self._field_cost(field_name, value), True))
+        return field_name, options
+
+    def _field_cost(self, field_name: str, value: Any) -> Fraction:
+        candidate_costs = self._candidate_costs.get(field_name)
+        if candidate_costs is not None:
+            for key, raw_cost in candidate_costs.items():
+                if _values_equal(key, value):
+                    return _as_cost(raw_cost, field_name, value)
+        if self.costs is None:
+            return self.default_cost
+        if callable(self.costs):
+            return _as_cost(self.costs(field_name, value), field_name, value)
+        if field_name not in self.costs:
+            return self.default_cost
+        spec = self.costs[field_name]
+        if isinstance(spec, Mapping):
+            for key, raw_cost in spec.items():
+                if _values_equal(key, value):
+                    return _as_cost(raw_cost, field_name, value)
+            return self.default_cost
+        return _as_cost(spec, field_name, value)
+
+    def _rebuild_with_changes(
+        self, original: dict[str, Any], selected: list[tuple[str, Any]]
+    ) -> dict[str, Any]:
+        changed = dict(original)
+        for field_name, value in selected:
+            if value is _PLAN_ABSENT:
+                changed.pop(field_name, None)
+            else:
+                changed[field_name] = value
+        return self.rebuild(changed)
+
+    def _matches_target(self, record: Mapping[str, Any], target: str) -> bool:
+        env = dict(record)
+        matched = [
+            category
+            for category, predicates in self.rules.items()
+            if all(self._predicate_matches(predicate, env) for predicate in predicates)
+        ]
+        if target not in matched:
+            return False
+        return not self.exclusive or matched == [target]
+
+    def _predicate_matches(self, predicate, env: dict[str, Any]) -> bool:
+        kind, payload = predicate
+        if kind == "call":
+            try:
+                return bool(payload(env))
+            except Exception:
+                if self.on_rule_error == "raise":
+                    raise
+                return False
+        try:
+            self.evaluator.names = env
+            return bool(self.evaluator.eval(payload, previously_parsed=payload))
+        except Exception:
+            if self.on_rule_error == "raise":
+                raise
+            return False
+
+    def _evaluate_spec(self, spec, env: dict[str, Any], field: str):
+        kind, payload = spec
+        if kind == "call":
+            return payload(env)
+        self.evaluator.names = env
+        return self.evaluator.eval(payload, previously_parsed=payload)
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    if left is right:
+        return True
+    if left is _PLAN_ABSENT or right is _PLAN_ABSENT:
+        return False
+    try:
+        result = left == right
+    except Exception:
+        return False
+    try:
+        return bool(result)
+    except Exception:
+        return False
+
+
+def _as_cost(raw: Any, field_name: str, value: Any) -> Fraction:
+    label = f"cost for {field_name!r}"
+    if value is not None:
+        label += f" value {value!r}"
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, Decimal, Fraction)):
+        raise TypeError(f"{label} must be a number, got {type(raw).__name__}")
+    if isinstance(raw, float):
+        if not math.isfinite(raw):
+            raise ValueError(f"{label} must be finite")
+        result = Fraction(Decimal(str(raw)))
+    elif isinstance(raw, Decimal):
+        if not raw.is_finite():
+            raise ValueError(f"{label} must be finite")
+        result = Fraction(raw)
+    else:
+        result = Fraction(raw)
+    if result < 0:
+        raise ValueError(f"{label} must not be negative")
+    return result
+
+
+def _normalize_derived(derived) -> dict[str, tuple]:
+    if derived is None:
+        return {}
+    if not isinstance(derived, Mapping):
+        raise TypeError("derived must be a mapping of name -> expression")
+    result = {}
+    for name, spec in derived.items():
+        if not isinstance(name, str):
+            raise TypeError("derived column names must be strings")
+        result[name] = _compile_spec(spec, f"derived column {name!r}")
+    return result
+
+
+def _normalize_rules(rules, evaluator) -> dict[str, tuple[tuple, ...]]:
+    if isinstance(rules, Mapping):
+        items = list(rules.items())
+    elif isinstance(rules, Iterable):
+        items = list(rules)
+    else:
+        raise TypeError("rules must be a mapping or an iterable of (category, rule) pairs")
+
+    normalized = {}
+    for item in items:
+        if not isinstance(item, (tuple, list)) or len(item) != 2:
+            raise TypeError("each rule must be a (category, expression) pair")
+        category, spec = item
+        if not isinstance(category, str):
+            raise TypeError("category names must be strings")
+        if category in normalized:
+            raise ValueError(f"duplicate category: {category!r}")
+        if _is_compiled_spec(spec):
+            specs = [spec]
+        elif isinstance(spec, (str, ast.AST)) or callable(spec):
+            specs = [spec]
+        elif isinstance(spec, Iterable):
+            specs = list(spec)
+        else:
+            raise TypeError(f"rule for {category!r} must be an expression or iterable")
+        if not specs:
+            raise ValueError(f"rule for {category!r} must contain at least one expression")
+        normalized[category] = tuple(_compile_spec(one, f"rule for {category!r}") for one in specs)
+    return normalized
+
+
+def _is_compiled_spec(spec) -> bool:
+    return isinstance(spec, tuple) and len(spec) == 2 and spec[0] in ("expr", "call")
+
+
+def _compile_spec(spec, label: str) -> tuple:
+    if _is_compiled_spec(spec):
+        return spec
+    if callable(spec):
+        return ("call", spec)
+    if not isinstance(spec, (str, ast.AST)):
+        raise TypeError(f"{label} must be an expression string or callable")
+    node: ast.AST
+    if isinstance(spec, str):
+        try:
+            parsed = ast.parse(spec.strip())
+        except SyntaxError as exc:
+            raise InvalidExpression(f"{label} has invalid syntax: {exc.msg}") from exc
+        if not parsed.body:
+            raise InvalidExpression(f"{label} is empty")
+        if len(parsed.body) > 1:
+            raise InvalidExpression(f"{label} must be a single expression")
+        node = parsed.body[0]
+    elif isinstance(spec, ast.Expression):
+        node = spec.body
+    elif isinstance(spec, ast.Module):
+        if not spec.body:
+            raise InvalidExpression(f"{label} is empty")
+        if len(spec.body) > 1:
+            raise InvalidExpression(f"{label} must be a single expression")
+        node = spec.body[0]
+    else:
+        node = spec
+    if isinstance(node, ast.Expr):
+        node = node.value
+    if not isinstance(node, ast.expr):
+        raise InvalidExpression(f"{label} must be a single expression")
+    return ("expr", node)
