@@ -22,6 +22,7 @@ class Paragraph(HasChildren):
     numbering = cobble.field()
     alignment = cobble.field()
     indent = cobble.field()
+    tab_stops = cobble.field()
 
 
 @cobble.data
@@ -30,6 +31,14 @@ class ParagraphIndent(object):
     end = cobble.field()
     first_line = cobble.field()
     hanging = cobble.field()
+
+
+@cobble.data
+class TabStop(object):
+    # Position in twips (twentieths of a point) from the start of the line.
+    position = cobble.field()
+    # One of: left, center, right, decimal.
+    alignment = cobble.field()
 
 
 @cobble.data
@@ -126,14 +135,17 @@ def document(children, notes=None, comments=None):
         comments = []
     return Document(children, notes, comments=comments)
 
-def paragraph(children, style_id=None, style_name=None, numbering=None, alignment=None, indent=None):
+def paragraph(children, style_id=None, style_name=None, numbering=None, alignment=None, indent=None, tab_stops=None):
     if indent is None:
         indent = paragraph_indent()
 
-    return Paragraph(children, style_id, style_name, numbering, alignment=alignment, indent=indent)
+    return Paragraph(children, style_id, style_name, numbering, alignment=alignment, indent=indent, tab_stops=tab_stops)
 
 def paragraph_indent(start=None, end=None, first_line=None, hanging=None):
     return ParagraphIndent(start=start, end=end, first_line=first_line, hanging=hanging)
+
+def tab_stop(position, alignment="left"):
+    return TabStop(position=position, alignment=alignment)
 
 def run(
     children,

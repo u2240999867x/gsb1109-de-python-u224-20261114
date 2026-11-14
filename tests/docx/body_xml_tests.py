@@ -159,6 +159,97 @@ class ParagraphTests(object):
 
         assert_equal(None, paragraph.numbering)
 
+    def test_paragraph_has_no_tab_stops_if_it_has_no_tabs_properties(self):
+        paragraph_xml = xml_element("w:p")
+        paragraph = _read_and_get_document_xml_element(paragraph_xml)
+        assert_equal(None, paragraph.tab_stops)
+
+    def test_paragraph_tab_stops_are_read_from_paragraph_properties(self):
+        properties_xml = xml_element("w:pPr", {}, [
+            xml_element("w:tabs", {}, [
+                xml_element("w:tab", {"w:val": "left", "w:pos": "2160"}),
+                xml_element("w:tab", {"w:val": "right", "w:pos": "5000"}),
+                xml_element("w:tab", {"w:val": "decimal", "w:pos": "7000"}),
+            ]),
+        ])
+        paragraph_xml = xml_element("w:p", {}, [properties_xml])
+        paragraph = _read_and_get_document_xml_element(paragraph_xml)
+        assert_equal(
+            [
+                documents.tab_stop(2160, "left"),
+                documents.tab_stop(5000, "right"),
+                documents.tab_stop(7000, "decimal"),
+            ],
+            paragraph.tab_stops,
+        )
+
+    def test_paragraph_inherits_tab_stops_from_paragraph_style(self):
+        properties_xml = xml_element("w:pPr", {}, [
+            xml_element("w:pStyle", {"w:val": "PriceLine"}),
+        ])
+        paragraph_xml = xml_element("w:p", {}, [properties_xml])
+
+        styles = Styles.create(
+            paragraph_styles={"PriceLine": Style(
+                style_id="PriceLine",
+                name="Price Line",
+                tab_stops=(documents.tab_stop(5000, "right"),),
+            )},
+        )
+        paragraph = _read_and_get_document_xml_element(paragraph_xml, styles=styles)
+        assert_equal([documents.tab_stop(5000, "right")], paragraph.tab_stops)
+
+    def test_clear_in_paragraph_cancels_tab_stop_declared_by_paragraph_style(self):
+        properties_xml = xml_element("w:pPr", {}, [
+            xml_element("w:pStyle", {"w:val": "PriceLine"}),
+            xml_element("w:tabs", {}, [
+                xml_element("w:tab", {"w:val": "clear", "w:pos": "2160"}),
+            ]),
+        ])
+        paragraph_xml = xml_element("w:p", {}, [properties_xml])
+
+        styles = Styles.create(
+            paragraph_styles={"PriceLine": Style(
+                style_id="PriceLine",
+                name="Price Line",
+                tab_stops=(
+                    documents.tab_stop(2160, "left"),
+                    documents.tab_stop(5000, "right"),
+                ),
+            )},
+        )
+        paragraph = _read_and_get_document_xml_element(paragraph_xml, styles=styles)
+        assert_equal([documents.tab_stop(5000, "right")], paragraph.tab_stops)
+
+    def test_paragraph_tab_stop_overrides_style_tab_stop_at_same_position(self):
+        properties_xml = xml_element("w:pPr", {}, [
+            xml_element("w:pStyle", {"w:val": "PriceLine"}),
+            xml_element("w:tabs", {}, [
+                xml_element("w:tab", {"w:val": "decimal", "w:pos": "5000"}),
+            ]),
+        ])
+        paragraph_xml = xml_element("w:p", {}, [properties_xml])
+
+        styles = Styles.create(
+            paragraph_styles={"PriceLine": Style(
+                style_id="PriceLine",
+                name="Price Line",
+                tab_stops=(documents.tab_stop(5000, "right"),),
+            )},
+        )
+        paragraph = _read_and_get_document_xml_element(paragraph_xml, styles=styles)
+        assert_equal([documents.tab_stop(5000, "decimal")], paragraph.tab_stops)
+
+    def test_bar_tab_is_not_read_as_tab_stop(self):
+        properties_xml = xml_element("w:pPr", {}, [
+            xml_element("w:tabs", {}, [
+                xml_element("w:tab", {"w:val": "bar", "w:pos": "2160"}),
+            ]),
+        ])
+        paragraph_xml = xml_element("w:p", {}, [properties_xml])
+        paragraph = _read_and_get_document_xml_element(paragraph_xml)
+        assert_equal(None, paragraph.tab_stops)
+
     def test_content_of_deleted_paragraph_is_prepended_to_next_paragraph(self):
         styles = Styles.create(
             paragraph_styles={

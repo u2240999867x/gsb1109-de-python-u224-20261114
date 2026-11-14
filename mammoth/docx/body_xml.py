@@ -5,9 +5,11 @@ import sys
 from .. import documents
 from .. import results
 from .. import lists
+from .. import tabstops
 from .. import transforms
 from . import complex_fields
 from .dingbats import dingbats
+from .tabs_xml import read_tabs_element
 from .xmlparser import node_types, XmlElement, null_xml_element
 from .styles_xml import Styles
 from .uris import replace_fragment, uri_to_zip_entry_name
@@ -185,7 +187,24 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
                     ),
                     alignment=alignment,
                     indent=indent,
+                    tab_stops=_read_paragraph_tab_stops(properties, style[0]),
                 )).append_extra()
+
+    def _read_paragraph_tab_stops(properties, style_id):
+        paragraph_stops, cleared_positions = read_tabs_element(
+            properties.find_child_or_null("w:tabs"),
+        )
+        if style_id is None:
+            style_stops = ()
+        else:
+            style = styles.find_paragraph_style_by_id(style_id)
+            style_stops = style.tab_stops if style is not None else ()
+        tab_stops = tabstops.effective_tab_stops(
+            style_stops=style_stops,
+            paragraph_stops=paragraph_stops,
+            cleared_positions=cleared_positions,
+        )
+        return tab_stops if tab_stops else None
 
     def _read_paragraph_style(properties):
         return _read_style(properties, "w:pStyle", "Paragraph", styles.find_paragraph_style_by_id)

@@ -1,3 +1,12 @@
+# Unreleased
+
+* Read tab stops (w:tabs) from paragraph properties and paragraph styles into
+  `Paragraph.tab_stops`, including stops cancelled with w:val="clear". Add
+  `mammoth.tabstops`, which replays Word's tab layout against measured field
+  widths to reconstruct which tab stop each field of a line aligns to,
+  leaving unfilled columns and marking columns as uncertain when the width
+  data is insufficient.
+
 # 1.13.0
 
 * Read the children of w:customXml elements.

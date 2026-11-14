@@ -1,3 +1,4 @@
+from mammoth import documents
 from mammoth.docx.xmlparser import element as xml_element
 from mammoth.docx.styles_xml import read_styles_xml_element
 from ..testing import assert_equal
@@ -71,6 +72,36 @@ def test_style_name_is_none_if_name_element_does_not_exist():
     styles = read_styles_xml_element(element)
     assert_equal(None, styles.find_paragraph_style_by_id("Heading1").name)
     assert_equal(None, styles.find_character_style_by_id("Heading1Char").name)
+
+
+def test_paragraph_style_has_no_tab_stops_if_it_has_no_tabs_element():
+    element = xml_element("w:styles", {}, [
+        _paragraph_style_element("Heading1", "Heading 1"),
+    ])
+    styles = read_styles_xml_element(element)
+    assert_equal((), styles.find_paragraph_style_by_id("Heading1").tab_stops)
+
+
+def test_paragraph_style_tab_stops_are_read_from_paragraph_properties():
+    element = xml_element("w:styles", {}, [
+        xml_element("w:style", {"w:type": "paragraph", "w:styleId": "PriceLine"}, [
+            xml_element("w:name", {"w:val": "Price Line"}),
+            xml_element("w:pPr", {}, [
+                xml_element("w:tabs", {}, [
+                    xml_element("w:tab", {"w:val": "right", "w:pos": "5000"}),
+                    xml_element("w:tab", {"w:val": "decimal", "w:pos": "7000"}),
+                ]),
+            ]),
+        ]),
+    ])
+    styles = read_styles_xml_element(element)
+    assert_equal(
+        (
+            documents.tab_stop(5000, "right"),
+            documents.tab_stop(7000, "decimal"),
+        ),
+        styles.find_paragraph_style_by_id("PriceLine").tab_stops,
+    )
 
 
 def test_numbering_style_is_none_if_no_style_with_that_id_exists():

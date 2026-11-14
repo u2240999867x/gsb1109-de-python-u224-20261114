@@ -1,5 +1,7 @@
 import collections
 
+from .tabs_xml import read_tabs_element
+
 
 class Styles(object):
     @staticmethod
@@ -89,13 +91,15 @@ def read_styles_xml_element(element):
     )
 
 
-Style = collections.namedtuple("Style", ["style_id", "name"])
+Style = collections.namedtuple("Style", ["style_id", "name", "tab_stops"], defaults=[()])
 
 
 def _read_style_element(element):
     style_id = _read_style_id(element)
     name = element.find_child_or_null("w:name").attributes.get("w:val")
-    return Style(style_id=style_id, name=name)
+    tabs_element = element.find_child_or_null("w:pPr").find_child_or_null("w:tabs")
+    tab_stops, _cleared_positions = read_tabs_element(tabs_element)
+    return Style(style_id=style_id, name=name, tab_stops=tuple(tab_stops))
 
 
 NumberingStyle = collections.namedtuple("NumberingStyle", ["style_id", "num_id"])
