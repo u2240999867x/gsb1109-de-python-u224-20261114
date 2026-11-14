@@ -1,5 +1,7 @@
 from bibtexparser.middlewares.enclosing import AddEnclosingMiddleware
 from bibtexparser.middlewares.enclosing import RemoveEnclosingMiddleware
+from bibtexparser.middlewares.extract import ExtractEntriesMiddleware
+from bibtexparser.middlewares.extract import MissingDependency
 from bibtexparser.middlewares.fieldkeys import NormalizeFieldKeys
 from bibtexparser.middlewares.interpolate import ResolveStringReferencesMiddleware
 from bibtexparser.middlewares.latex_encoding import LatexDecodingMiddleware
@@ -28,11 +30,13 @@ from .parsestack import default_unparse_stack
 __all__ = [
     "AddEnclosingMiddleware",
     "BlockMiddleware",
+    "ExtractEntriesMiddleware",
     "LatexDecodingMiddleware",
     "LatexEncodingMiddleware",
     "LibraryMiddleware",
     "MergeCoAuthors",
     "MergeNameParts",
+    "MissingDependency",
     "MonthAbbreviationMiddleware",
     "MonthIntMiddleware",
     "MonthLongStringMiddleware",
