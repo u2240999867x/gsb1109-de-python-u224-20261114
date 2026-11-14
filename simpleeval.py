@@ -115,6 +115,7 @@ import os
 import sys
 import types
 import warnings
+from collections.abc import Mapping
 from random import random
 
 ########################################
@@ -393,6 +394,281 @@ class MultipleExpressions(UserWarning):
 # Sentinal used during attr access
 _ATTR_NOT_FOUND = object()
 
+# Human-readable spellings for comparison operators, used when explaining
+# chained comparisons.
+_COMPARISON_OPERATOR_TEXT = {
+    ast.Eq: "==",
+    ast.NotEq: "!=",
+    ast.Gt: ">",
+    ast.GtE: ">=",
+    ast.Lt: "<",
+    ast.LtE: "<=",
+    ast.In: "in",
+    ast.NotIn: "not in",
+    ast.Is: "is",
+    ast.IsNot: "is not",
+}
+
+
+def _safe_bool(value):
+    """Return bool(value), or None if the value deliberately isn't boolable."""
+    try:
+        return bool(value)
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+class ComparisonSegment(Mapping):
+    """One link of a comparison which was actually evaluated.
+
+    A chained comparison such as ``0 < weight <= cap()`` contains two
+    segments: ``0 < weight`` and ``weight <= cap()``.  A segment is only
+    recorded after its operator has really run, so segments after a failed
+    link (or after any other short-circuit) are not present.
+
+    ``left`` and ``right`` are exactly the values which were handed to the
+    comparison operator, ``result`` is what the operator returned, and
+    ``passed`` is the boolean form of that result (``None`` when the result
+    deliberately cannot be converted to a boolean).
+
+    ``index`` is the zero-based link index in the comparison, while
+    ``position`` is the same link numbered from one for human-facing output.
+    ``text`` is the corresponding portion of the source expression, and the
+    line/column fields point at it.
+
+    Attribute access and mapping-style access expose the same values, and
+    ``as_dict()`` returns plain data suitable for JSON.
+    """
+
+    _KEYS = (
+        "left",
+        "right",
+        "result",
+        "passed",
+        "operator",
+        "index",
+        "position",
+        "text",
+        "line",
+        "column",
+        "end_line",
+        "end_column",
+    )
+
+    def __init__(
+        self,
+        left,
+        right,
+        result,
+        operation,
+        index,
+        text,
+        line,
+        column,
+        end_line,
+        end_column,
+    ):
+        self.left = left
+        self.right = right
+        self.result = result
+        self.operator = _COMPARISON_OPERATOR_TEXT.get(type(operation), type(operation).__name__)
+        self.index = index
+        self.text = text
+        self.line = line
+        self.column = column
+        self.end_line = end_line
+        self.end_column = end_column
+
+    @property
+    def position(self):
+        """One-based position of this segment in the comparison."""
+        return self.index + 1
+
+    @property
+    def passed(self):
+        """The truth value of this segment's result, if it has one."""
+        return _safe_bool(self.result)
+
+    @property
+    def failed(self):
+        """True when this segment's result is false."""
+        return self.passed is False
+
+    @property
+    def op(self):
+        """Alias for :attr:`operator`."""
+        return self.operator
+
+    @property
+    def lhs(self):
+        """Alias for :attr:`left`."""
+        return self.left
+
+    @property
+    def rhs(self):
+        """Alias for :attr:`right`."""
+        return self.right
+
+    @property
+    def ok(self):
+        """Alias for :attr:`passed`."""
+        return self.passed
+
+    @property
+    def span(self):
+        """The span of this segment in the original expression."""
+        return {
+            "line": self.line,
+            "column": self.column,
+            "end_line": self.end_line,
+            "end_column": self.end_column,
+        }
+
+    @property
+    def location(self):
+        """Human readable span, e.g. ``1:4-1:19``."""
+        return f"{self.line}:{self.column}-{self.end_line}:{self.end_column}"
+
+    def __getitem__(self, key):
+        if key in ("op", "lhs", "rhs", "ok", "span", "location"):
+            return getattr(self, key)
+        if key not in self._KEYS:
+            raise KeyError(key)
+        return getattr(self, key)
+
+    def __iter__(self):
+        return iter(self._KEYS)
+
+    def __len__(self):
+        return len(self._KEYS)
+
+    def as_dict(self):
+        """Return this segment as a plain dict."""
+        return {key: getattr(self, key) for key in self._KEYS}
+
+    def __repr__(self):
+        return (
+            f"<ComparisonSegment position={self.position} "
+            f"{self.left!r} {self.operator} {self.right!r} -> {self.result!r}>"
+        )
+
+
+class ComparisonExplanation:
+    """The value of an expression together with its evaluated comparisons.
+
+    Returned by ``eval(..., explain=True)`` (or ``eval_with_explanation``).
+    ``value`` is exactly the normal return value of the expression, so a
+    chained comparison is never recomputed to build the explanation.
+
+    ``segments`` only contains comparisons which actually ran.  In particular,
+    no comparator skipped by chain short-circuiting is evaluated to describe
+    it.
+
+    The object supports attribute access, dict-style access, and tuple-style
+    unpacking::
+
+        result, segments = s.eval("0 < weight <= cap()", explain=True)
+    """
+
+    def __init__(self, value, segments, expression):
+        self.value = value
+        self.segments = list(segments)
+        self.expression = expression
+
+    @property
+    def result(self):
+        """Alias for :attr:`value`."""
+        return self.value
+
+    @property
+    def passed(self):
+        """The truth value of the result, if it has one."""
+        return _safe_bool(self.value)
+
+    @property
+    def failed(self):
+        """The first segment whose result is false, or ``None``."""
+        for segment in self.segments:
+            if segment.passed is False:
+                return segment
+        return None
+
+    @property
+    def failed_segment(self):
+        """Alias for :attr:`failed`."""
+        return self.failed
+
+    @property
+    def failed_index(self):
+        """Zero-based index of the first failed segment, or ``None``."""
+        segment = self.failed
+        return None if segment is None else segment.index
+
+    @property
+    def failed_position(self):
+        """One-based position of the first failed segment, or ``None``."""
+        segment = self.failed
+        return None if segment is None else segment.position
+
+    def __getitem__(self, key):
+        if key == 0:
+            return self.value
+        if key == 1:
+            return self.segments
+        if key in ("value", "result"):
+            return self.value
+        if key in ("segments", "comparisons"):
+            return self.segments
+        if key in ("failed", "failed_segment"):
+            return self.failed
+        if key == "failed_index":
+            return self.failed_index
+        if key == "failed_position":
+            return self.failed_position
+        if key == "passed":
+            return self.passed
+        if key == "expression":
+            return self.expression
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter((self.value, self.segments))
+
+    def __len__(self):
+        return 2
+
+    def as_dict(self):
+        """Return the explanation as JSON-friendly plain data."""
+        return {
+            "value": self.value,
+            "passed": self.passed,
+            "segments": [segment.as_dict() for segment in self.segments],
+            "failed_index": self.failed_index,
+            "failed_position": self.failed_position,
+            "expression": self.expression,
+        }
+
+    def __bool__(self):
+        return bool(self.value)
+
+    def __eq__(self, other):
+        if isinstance(other, ComparisonExplanation):
+            return self.value == other.value and self.segments == other.segments
+        if isinstance(other, Mapping):
+            try:
+                return all(self[key] == value for key, value in other.items())
+            except KeyError:
+                return False
+        if isinstance(other, (list, tuple)) and len(other) == 2:
+            return (self.value, self.segments) == tuple(other)
+        return self.value == other
+
+    def __repr__(self):
+        return (
+            f"<ComparisonExplanation value={self.value!r} "
+            f"segments={len(self.segments)} failed_position={self.failed_position}>"
+        )
+
 
 class ModuleWrapper:
     """Wraps a module to safely expose it in expressions.
@@ -547,10 +823,20 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
 
     expr = ""
 
-    def __init__(self, operators=None, functions=None, names=None, allowed_attrs=None):
+    def __init__(
+        self,
+        operators=None,
+        functions=None,
+        names=None,
+        allowed_attrs=None,
+        explain=False,
+    ):
         """
         Create the evaluator instance.  Set up valid operators (+,-, etc)
-        functions (add, random, get_val, whatever) and names."""
+        functions (add, random, get_val, whatever) and names.
+
+        If ``explain`` is true, ``eval`` returns a ComparisonExplanation by
+        default.  It can still be overridden per call."""
 
         if operators is None:
             operators = DEFAULT_OPERATORS.copy()
@@ -563,6 +849,12 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
         self.functions = functions
         self.names = names
         self.allowed_attrs = allowed_attrs
+        self.default_explain = explain
+
+        self._explain_enabled = False
+        self._comparison_log = []
+        self._eval_source = ""
+        self.last_explanation = None
 
         self.nodes = {
             ast.Expr: self._eval_expr,
@@ -653,14 +945,74 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
             )
         return parsed.body[0]
 
-    def eval(self, expr, previously_parsed=None):
+    def eval(self, expr, previously_parsed=None, explain=None, with_explanation=None):
         """evaluate an expression, using the operators, functions and
-        names previously set up."""
+        names previously set up.
+
+        By default this returns exactly the value of the expression.  Pass
+        ``explain=True`` (or set ``SimpleEval(explain=True)``) to receive a
+        :class:`ComparisonExplanation` instead.  Its ``value`` attribute is
+        still the normal return value, and its ``segments`` describe only the
+        comparison links which really ran.
+
+        ``with_explanation`` is accepted as an alias for ``explain``.
+        """
 
         # set a copy of the expression aside, so we can give nice errors...
         self.expr = expr
 
-        return self._eval(previously_parsed or self.parse(expr))
+        if explain is None:
+            explain = with_explanation
+        if explain is None:
+            explain = self.default_explain
+
+        self.last_explanation = None
+
+        # Parse before switching modes, so a parse error behaves exactly as
+        # it does without explanation.
+        parsed = previously_parsed or self.parse(expr)
+        if not explain:
+            # Make sure a nested plain eval while an outer explanation is
+            # running cannot add its own comparisons to the outer trace.
+            previous_enabled = self._explain_enabled
+            self._explain_enabled = False
+            try:
+                return self._eval(parsed)
+            finally:
+                self._explain_enabled = previous_enabled
+
+        previous_source = self._eval_source
+        previous_enabled = self._explain_enabled
+        previous_log = self._comparison_log
+        previous_last = self.last_explanation
+        # ``parse`` strips the expression, so AST offsets refer to the
+        # stripped text.  Keep the same source for position reporting.
+        self._eval_source = expr.strip()
+        self._explain_enabled = True
+        self._comparison_log = []
+        try:
+            value = self._eval(parsed)
+            explanation = ComparisonExplanation(value, self._comparison_log, expr)
+        finally:
+            self._explain_enabled = previous_enabled
+            self._eval_source = previous_source
+            self._comparison_log = previous_log
+            self.last_explanation = previous_last
+
+        self.last_explanation = explanation
+        return explanation
+
+    def eval_with_explanation(self, expr, previously_parsed=None):
+        """Evaluate ``expr`` and return a :class:`ComparisonExplanation`."""
+        return self.eval(expr, previously_parsed=previously_parsed, explain=True)
+
+    def eval_with_details(self, expr, previously_parsed=None):
+        """Alias for :meth:`eval_with_explanation`."""
+        return self.eval_with_explanation(expr, previously_parsed=previously_parsed)
+
+    def explain(self, expr, previously_parsed=None):
+        """Evaluate ``expr`` and return a :class:`ComparisonExplanation`."""
+        return self.eval_with_explanation(expr, previously_parsed=previously_parsed)
 
     def _eval(self, node):
         """The internal evaluator used on each node in the parsed tree."""
@@ -743,15 +1095,69 @@ class SimpleEval:  # pylint: disable=too-few-public-methods
                     break
         return to_return
 
+    def _comparison_source_text(self, start_node, end_node):
+        """Return the source text between two nodes, if it can be located."""
+        source = self._eval_source
+        start_line = getattr(start_node, "lineno", None)
+        end_line = getattr(end_node, "end_lineno", None)
+        if not source or start_line is None or end_line is None:
+            return ""
+
+        start_col = start_node.col_offset
+        end_col = end_node.end_col_offset
+        if start_col is None or end_col is None:
+            return ""
+
+        lines = source.splitlines(keepends=True)
+        if start_line < 1 or end_line > len(lines):
+            return ""
+
+        if start_line == end_line:
+            raw = lines[start_line - 1].encode("utf-8")
+            return raw[start_col:end_col].decode("utf-8")
+
+        parts = [lines[start_line - 1].encode("utf-8")[start_col:]]
+        parts.extend(line.encode("utf-8") for line in lines[start_line : end_line - 1])
+        parts.append(lines[end_line - 1].encode("utf-8")[:end_col])
+        return b"".join(parts).decode("utf-8")
+
+    @staticmethod
+    def _node_position(node):
+        return (
+            getattr(node, "lineno", None),
+            getattr(node, "col_offset", None),
+            getattr(node, "end_lineno", None),
+            getattr(node, "end_col_offset", None),
+        )
+
     def _eval_compare(self, node):
         right = self._eval(node.left)
         to_return = True
-        for operation, comp in zip(node.ops, node.comparators):
+        previous_operand = node.left
+        for index, (operation, comp) in enumerate(zip(node.ops, node.comparators)):
             if not to_return:
                 break
             left = right
             right = self._eval(comp)
             to_return = self.operators[type(operation)](left, right)
+
+            if self._explain_enabled:
+                line, column, end_line, end_column = self._node_position(comp)
+                self._comparison_log.append(
+                    ComparisonSegment(
+                        left=left,
+                        right=right,
+                        result=to_return,
+                        operation=operation,
+                        index=index,
+                        text=self._comparison_source_text(previous_operand, comp),
+                        line=getattr(previous_operand, "lineno", None),
+                        column=getattr(previous_operand, "col_offset", None),
+                        end_line=end_line,
+                        end_column=end_column,
+                    )
+                )
+            previous_operand = comp
         return to_return
 
     def _eval_ifexp(self, node):
@@ -906,8 +1312,15 @@ class EvalWithCompoundTypes(SimpleEval):
 
     _max_count = 0
 
-    def __init__(self, operators=None, functions=None, names=None, allowed_attrs=None):
-        super().__init__(operators, functions, names, allowed_attrs)
+    def __init__(
+        self,
+        operators=None,
+        functions=None,
+        names=None,
+        allowed_attrs=None,
+        explain=False,
+    ):
+        super().__init__(operators, functions, names, allowed_attrs, explain)
 
         self.functions.update(list=list, tuple=tuple, dict=dict, set=set)
 
@@ -923,10 +1336,15 @@ class EvalWithCompoundTypes(SimpleEval):
             }
         )
 
-    def eval(self, expr, previously_parsed=None):
+    def eval(self, expr, previously_parsed=None, explain=None, with_explanation=None):
         # reset _max_count for each eval run
         self._max_count = 0
-        return super().eval(expr, previously_parsed)
+        return super().eval(
+            expr,
+            previously_parsed=previously_parsed,
+            explain=explain,
+            with_explanation=with_explanation,
+        )
 
     def _eval_dict(self, node):
         result = {}
@@ -1013,12 +1431,40 @@ class EvalWithCompoundTypes(SimpleEval):
         return to_return
 
 
-def simple_eval(expr, operators=None, functions=None, names=None, allowed_attrs=None):
-    """Simply evaluate an expression"""
+def simple_eval(
+    expr,
+    operators=None,
+    functions=None,
+    names=None,
+    allowed_attrs=None,
+    explain=None,
+    with_explanation=None,
+):
+    """Simply evaluate an expression.
+
+    With ``explain=True`` the result is a :class:`ComparisonExplanation`;
+    otherwise the plain value of the expression is returned.
+    """
     s = SimpleEval(
         operators=operators,
         functions=functions,
         names=names,
         allowed_attrs=allowed_attrs,
     )
-    return s.eval(expr)
+    return s.eval(expr, explain=explain, with_explanation=with_explanation)
+
+
+def explain_comparison(expr, operators=None, functions=None, names=None, allowed_attrs=None):
+    """Evaluate ``expr`` and return a :class:`ComparisonExplanation`."""
+    return simple_eval(
+        expr,
+        operators=operators,
+        functions=functions,
+        names=names,
+        allowed_attrs=allowed_attrs,
+        explain=True,
+    )
+
+
+# Convenient public alias.
+ComparisonDetail = ComparisonSegment

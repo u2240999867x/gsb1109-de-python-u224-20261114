@@ -389,6 +389,46 @@ Say.  This would allow a certain level of 'scriptyness' if you had these
 evaluations happening as callbacks in a program.  Although you really are
 reaching the end of what this library is intended for at this stage.
 
+Explaining Comparisons
+----------------------
+
+By default, evaluating a chained comparison returns just its boolean (or other)
+result.  If you want to know *which* link failed, pass ``explain=True``:
+
+.. code-block:: pycon
+
+    >>> s = SimpleEval(names={"weight": 50}, functions={"cap": lambda: 10})
+    >>> explanation = s.eval("0 < weight <= cap()", explain=True)
+    >>> explanation.value
+    False
+    >>> explanation.failed_position
+    2
+    >>> explanation.segments[1].text
+    'weight <= cap()'
+    >>> explanation.segments[1].left, explanation.segments[1].right
+    (50, 10)
+    >>> explanation.segments[1].passed
+    False
+
+``segments`` only holds comparisons which really ran, in order.  Each one has
+the two values handed to the operator (``left`` and ``right``), the operator
+symbol (``operator``), the truth value of the result (``passed``), its
+zero-based ``index`` and one-based ``position``, and its location in the
+source expression (``text``, ``line``, ``column``, ``end_line``,
+``end_column``).  A ``ComparisonSegment`` supports both attribute access and
+mapping-style access, and ``explanation.as_dict()`` returns plain data suitable
+for JSON.
+
+Explanation never changes evaluation order.  If an earlier link fails, the
+remaining comparators are not evaluated just to describe them, and a value in
+the middle of a chain is evaluated once and reported from that same evaluation.
+
+Combining ``explain=True`` with ``previously_parsed`` (or setting
+``SimpleEval(explain=True)``) works the same way.  ``eval_with_explanation``,
+``eval_with_details``, the ``explain()`` method and the module-level
+``explain_comparison`` are convenience spellings.  Without ``explain=True``,
+``eval`` returns the plain value just as before.
+
 Compound Types
 --------------
 
