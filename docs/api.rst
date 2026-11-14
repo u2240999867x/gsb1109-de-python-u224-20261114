@@ -214,6 +214,38 @@ Tracking
    Enum with values ``CREATED``, ``UPDATED``, ``DELETED``.
    Import from ``pyais.tracker``.
 
+Static Data History
+-------------------
+
+``StaticDataHistory(ttl_in_seconds=86400)``
+   Keeps the history of static data reports (message type 24) per vessel.
+   Part A (ship name) and Part B (all other static data) are tracked as
+   independent version chains, so the two halves may come from different
+   batches and each half expires on its own. Records are ordered by their
+   observation time, never by import order: a late imported, older Part B
+   can not overwrite a newer one.
+
+   .. code-block:: python
+
+      from pyais import StaticDataHistory, StaticHalfState
+
+      with StaticDataHistory() as history:
+          history.update(msg, ts_epoch=1673259271.0)      # ingest a type 24 message
+          snapshot = history.query(211512345, at_epoch=1673260000.0)
+          if snapshot.b_state is StaticHalfState.EXPIRED:
+              print("part B lapsed at", snapshot.b_expires_at)
+
+``StaticSnapshot``
+   The static data of a vessel as seen at a given observation time. Fields
+   of a half that is not valid at query time are ``None``; in particular,
+   dimensions of an expired Part B are never leaked. For auxiliary craft,
+   ``mothership_mmsi`` is set instead of the dimension fields
+   (``to_bow``/``to_stern``/``to_port``/``to_starboard``).
+
+``StaticHalfState``
+   Enum with values ``VALID``, ``EXPIRED``, ``MISSING``.
+   Import from ``pyais.static_history``.
+
 Filters
 -------
 
