@@ -1,6 +1,14 @@
 ﻿EXIF.py Change Log
 ##################
 
+Unreleased
+    * Fix extraction of uncompressed TIFF thumbnails (``TIFFThumbnail``) and
+      record the byte range of each strip in ``TIFFThumbnailStripRanges``;
+      strips are copied in logical order and the strip offsets array may be
+      inlined in the IFD entry or stored elsewhere. If a strip extends past
+      the end of the file, only the preview is rejected and the unverifiable
+      byte range is logged.
+
 3.5.1 — 2025-08-23
     * Don't raise exception from decode_maker_note() if strict==False (#243) by Nathan Olson
 

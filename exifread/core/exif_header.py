@@ -397,14 +397,59 @@ class ExifHeader:
 
     def extract_tiff_thumbnail(self, thumb_ifd: int) -> None:
         """
-        Extract uncompressed TIFF thumbnail.
+        Extract uncompressed TIFF thumbnail as a standalone TIFF file.
 
         Take advantage of the pre-existing layout in the thumbnail IFD as
-        much as possible
+        much as possible. Strips are copied in logical (image) order, which
+        may differ from their order on disk. The byte range each strip
+        occupies in the original file is recorded in
+        ``TIFFThumbnailStripRanges`` as a list of ``(start, end)`` tuples.
+
+        If a strip extends beyond the end of the file, only the preview is
+        rejected: the rest of the metadata is kept and the byte range that
+        cannot be verified is logged.
         """
         thumb = self.tags.get("Thumbnail Compression")
-        if not thumb or thumb.printable != "Uncompressed TIFF":
+        if not thumb or thumb.printable != "Uncompressed":
             return
+
+        offsets_tag = self.tags.get("Thumbnail StripOffsets")
+        counts_tag = self.tags.get("Thumbnail StripByteCounts")
+        if not offsets_tag or not counts_tag:
+            logger.warning("Uncompressed TIFF thumbnail is missing strip tags.")
+            return
+        old_offsets = list(offsets_tag.values)
+        old_counts = list(counts_tag.values)
+        if len(old_offsets) != len(old_counts):
+            logger.warning(
+                "TIFF thumbnail rejected: StripOffsets (%d) and StripByteCounts "
+                "(%d) do not match.",
+                len(old_offsets),
+                len(old_counts),
+            )
+            return
+
+        # Byte range occupied by each strip in the original file, in logical
+        # order. Strips may be stored out of order on disk.
+        self.file_handle.seek(0, 2)
+        file_size = self.file_handle.tell()
+        strip_ranges = []
+        for old_offset, old_count in zip(old_offsets, old_counts):
+            start = self.offset + old_offset
+            end = start + old_count
+            if end > file_size:
+                logger.warning(
+                    "TIFF thumbnail rejected: strip byte range [%d, %d) extends "
+                    "past end of file (%d bytes); bytes [%d, %d) cannot be "
+                    "verified.",
+                    start,
+                    end,
+                    file_size,
+                    max(start, file_size),
+                    end,
+                )
+                return
+            strip_ranges.append((start, end))
 
         entries = self.s2n(thumb_ifd, 2)
         # this is header plus offset to IFD ...
@@ -417,6 +462,9 @@ class ExifHeader:
         tiff += self.file_handle.read(entries * 12 + 2) + b"\x00\x00\x00\x00"
 
         # fix up large value offset pointers into data area
+        strip_entry = 0
+        strip_off = 0
+        strip_len = 0
         for i in range(entries):
             entry = thumb_ifd + 2 + 12 * i
             tag = self.s2n(entry, 2)
@@ -427,12 +475,13 @@ class ExifHeader:
             # start of the 4-byte pointer area in entry
             ptr = i * 12 + 18
 
-            # remember strip offsets
-            strip_len = 0
+            # remember strip offsets location and entry size: the offsets
+            # array may be inlined in the entry or stored elsewhere
             if tag == 0x0111:
+                strip_entry = i * 12 + 10
                 strip_off = ptr
-                strip_len = count * type_length
-                # is it in the data area?
+                strip_len = type_length
+            # is it in the data area?
             if count * type_length > 4:
                 # update offset pointer (nasty "strings are immutable" crap)
                 # should be able to say "tiff[ptr:ptr+4]=newoff"
@@ -441,24 +490,54 @@ class ExifHeader:
                 # remember strip offsets location
                 if tag == 0x0111:
                     strip_off = newoff
-                    strip_len = 4
                 # get original data and store it
                 self.file_handle.seek(self.offset + old_offset)
                 tiff += self.file_handle.read(count * type_length)
 
-        # add pixel strips and update strip offset info
-        old_offsets = self.tags["Thumbnail StripOffsets"].values
-        old_counts = self.tags["Thumbnail StripByteCounts"].values
-        for i, old_offset in enumerate(old_offsets):
+        # Pixel data is appended after the IFD and its data area; make sure
+        # the new strip offsets still fit in the original field type.
+        if (
+            strip_ranges
+            and strip_len != 4
+            and len(tiff)
+            + 4 * len(strip_ranges)
+            + sum(end - start for start, end in strip_ranges)
+            > (1 << (8 * strip_len)) - 1
+        ):
+            # Offsets no longer fit: relocate the array and store LONGs.
+            tiff = (
+                tiff[: strip_entry + 2]
+                + self.n2b(FieldType.LONG, 2)
+                + tiff[strip_entry + 4 :]
+            )
+            strip_off = len(tiff)
+            tiff = (
+                tiff[: strip_entry + 8]
+                + self.n2b(strip_off, 4)
+                + tiff[strip_entry + 12 :]
+            )
+            tiff += b"\x00" * 4 * len(strip_ranges)
+            strip_len = 4
+
+        # add pixel strips in logical order and update strip offset info
+        for start, end in strip_ranges:
             # update offset pointer (more nasty "strings are immutable" crap)
             offset = self.n2b(len(tiff), strip_len)
             tiff = tiff[:strip_off] + offset + tiff[strip_off + strip_len :]
             strip_off += strip_len
             # add pixel strip to end
-            self.file_handle.seek(self.offset + old_offset)
-            tiff += self.file_handle.read(old_counts[i])
+            self.file_handle.seek(start)
+            tiff += self.file_handle.read(end - start)
 
         self.tags["TIFFThumbnail"] = tiff
+        self.tags["TIFFThumbnailStripRanges"] = IfdTag(
+            printable=str(strip_ranges),
+            tag=0,
+            field_type=FieldType.PROPRIETARY,
+            values=strip_ranges,
+            field_offset=0,
+            field_length=0,
+        )
 
     def extract_jpeg_thumbnail(self) -> None:
         """
