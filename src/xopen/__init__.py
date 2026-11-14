@@ -3,14 +3,19 @@ Open compressed files transparently.
 """
 
 __all__ = [
+    "ArchiveIdentity",
+    "ReproducibleGzipConditions",
     "_PipedCompressionProgram",
     "__version__",
+    "archive_identity",
+    "reproducible_gzip_conditions",
     "xopen",
 ]
 
 import bz2
 import dataclasses
 import gzip
+import hashlib
 import io
 import lzma
 import os
@@ -629,6 +634,22 @@ def _open_gz(
     return _open_reproducible_gzip(filename, mode=mode, compresslevel=compresslevel)
 
 
+def _reproducible_gzip_backend_name(compresslevel: int) -> str:
+    """
+    Name of the in-process backend used for a reproducible gzip *write* at this
+    level. Single source of truth shared by the writer and
+    :func:`reproducible_gzip_conditions`.
+    """
+    # Igzip level 0 does not output uncompressed deflate blocks as zlib does
+    # and level 3 is slower but does not compress better than level 1 and 2.
+    if igzip is not None and compresslevel in (1, 2):
+        return "igzip"
+    if gzip_ng is not None:
+        # Zlib-ng level 1 creates much bigger files than zlib level 1.
+        return "gzip_ng"
+    return "gzip"
+
+
 def _open_reproducible_gzip(filename, mode: str, compresslevel: int):
     """
     Open a gzip file for writing (without external processes)
@@ -649,15 +670,30 @@ def _open_reproducible_gzip(filename, mode: str, compresslevel: int):
     )
     # Igzip level 0 does not output uncompressed deflate blocks as zlib does
     # and level 3 is slower but does not compress better than level 1 and 2.
-    if igzip is not None and (compresslevel in (1, 2) or "r" in mode):
-        gzip_file = igzip.IGzipFile(**kwargs, compresslevel=compresslevel)
-    elif gzip_ng is not None:
-        # Zlib-ng level 1 creates much bigger files than zlib level 1.
-        gzip_file = gzip_ng.GzipNGFile(
-            **kwargs, compresslevel=2 if compresslevel == 1 else compresslevel
-        )
+    if "r" in mode:
+        # Reading prefers igzip at every level; this does not affect the bytes
+        # written, so it is deliberately kept separate from the write-backend
+        # selection that reproducible_gzip_conditions() describes.
+        if igzip is not None:
+            gzip_file = igzip.IGzipFile(**kwargs, compresslevel=compresslevel)
+        elif gzip_ng is not None:
+            gzip_file = gzip_ng.GzipNGFile(
+                **kwargs, compresslevel=2 if compresslevel == 1 else compresslevel
+            )
+        else:
+            gzip_file = gzip.GzipFile(**kwargs, compresslevel=compresslevel)  # type: ignore
     else:
-        gzip_file = gzip.GzipFile(**kwargs, compresslevel=compresslevel)  # type: ignore
+        # Share the exact selection logic with reproducible_gzip_conditions().
+        backend = _reproducible_gzip_backend_name(compresslevel)
+        if backend == "igzip" and igzip is not None:
+            gzip_file = igzip.IGzipFile(**kwargs, compresslevel=compresslevel)
+        elif backend == "gzip_ng" and gzip_ng is not None:
+            # Zlib-ng level 1 creates much bigger files than zlib level 1.
+            gzip_file = gzip_ng.GzipNGFile(
+                **kwargs, compresslevel=2 if compresslevel == 1 else compresslevel
+            )
+        else:
+            gzip_file = gzip.GzipFile(**kwargs, compresslevel=compresslevel)  # type: ignore
     # When (I)GzipFile is created with a fileobj instead of a filename,
     # the passed file object is not closed when (I)GzipFile.close()
     # is called. This forces it to be closed.
@@ -762,6 +798,206 @@ def _file_is_a_socket_or_pipe(filepath):
         return not stat.S_ISREG(mode)
     except (OSError, TypeError):  # Type error for unexpected types in stat.
         return False
+
+
+@dataclasses.dataclass(frozen=True)
+class ArchiveIdentity:
+    """
+    Two independently queryable identities of a single archived record.
+
+    Reconciliation must keep these separate because switching the compression
+    backend can produce a different on-disk archive for the very same business
+    record:
+
+    - ``archive_digest`` identifies the *raw archived bytes*, that is the exact
+      gzip/bz2/xz/zstd/lz4 file as stored. Two different gzip files of the same
+      record never share this identity.
+    - ``content_digest`` identifies the *fully decompressed business bytes*.
+      Archives produced by different backends share this identity when they
+      decode to the same record.
+
+    Both digests are ``sha256`` hex strings. ``archive_size`` and
+    ``content_size`` are the corresponding byte lengths.
+    """
+
+    archive_digest: str
+    archive_size: int
+    content_digest: str
+    content_size: int
+
+    def same_archive(self, other: "ArchiveIdentity") -> bool:
+        """True only when the raw archived bytes are identical."""
+        return (
+            self.archive_digest == other.archive_digest
+            and self.archive_size == other.archive_size
+        )
+
+    def same_content(self, other: "ArchiveIdentity") -> bool:
+        """True only when the fully decompressed business bytes are identical."""
+        return (
+            self.content_digest == other.content_digest
+            and self.content_size == other.content_size
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class ReproducibleGzipConditions:
+    """
+    The complete set of parameters that defines one reproducible gzip write.
+
+    A gzip archive written with :func:`xopen` (``threads=0``) is byte-for-byte
+    reproducible exactly when all of these conditions are fixed. The target
+    file name is deliberately *not* part of the conditions: the reproducible
+    writer emits neither the original file name (the gzip ``FNAME`` header
+    flag is cleared) nor a modification time (``mtime`` is fixed to zero), so
+    renaming the output does not change a single byte.
+
+    Fields:
+
+    - ``compresslevel``: the gzip compression level (0-9).
+    - ``mtime``: the gzip header modification time, always ``0``.
+    - ``filename``: the gzip header original file name, always ``""``.
+    - ``backend``: the in-process compression backend that emitted the bytes
+      (``"gzip"``, ``"igzip"`` or ``"gzip_ng"``). Different backends emit
+      different deflate streams and therefore different raw archives even at
+      the same level, so the backend is part of the conditions.
+    """
+
+    compresslevel: int
+    mtime: int
+    filename: str
+    backend: str
+
+
+def _hash_file(path: FilePath) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(BUFFER_SIZE)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _hash_compressed(path: FileOrPath, format: str | None) -> tuple[str, int]:
+    """
+    Fully decompress a compressed file and hash every business byte.
+
+    The stream is read to completion on purpose: only a clean end of stream
+    (including the gzip CRC32/ISIZE trailer and the equivalent end markers of
+    the other formats) proves that the content is whole. A copy whose trailing
+    checksum information has been cut off raises EOFError even if every
+    already-decompressed prefix byte matched, so it can never be pronounced
+    content-identical.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    with xopen(path, mode="rb", threads=0, format=format) as f:
+        while True:
+            chunk = f.read(BUFFER_SIZE)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def archive_identity(path: FileOrPath, *, format: str | None = None) -> ArchiveIdentity:
+    """
+    Return both independently queryable identities of an archived record.
+
+    ``path`` may be a file name or an open binary file object. ``format``
+    overrides format autodetection (see :func:`xopen`). When the file is not
+    compressed, the archive identity and the content identity coincide.
+
+    File names are streamed in constant memory. An open file object is buffered
+    once (rewinding it first when it is seekable) so that both passes can read
+    it.
+
+    Raises EOFError (or another OSError) when the archive is truncated or
+    corrupt: in that case no content identity is returned, because an
+    identical-looking prefix is not sufficient to conclude content equality.
+    """
+    if isinstance(path, (str, bytes, os.PathLike)):
+        real_path = os.fspath(path)
+        archive_digest, archive_size = _hash_file(real_path)
+        detected_format = format or _detect_format_from_extension(real_path)
+        if detected_format is None:
+            detected_format = _detect_format_from_content(real_path)
+        if detected_format is None:
+            return ArchiveIdentity(
+                archive_digest=archive_digest,
+                archive_size=archive_size,
+                content_digest=archive_digest,
+                content_size=archive_size,
+            )
+        content_digest, content_size = _hash_compressed(real_path, detected_format)
+        return ArchiveIdentity(
+            archive_digest=archive_digest,
+            archive_size=archive_size,
+            content_digest=content_digest,
+            content_size=content_size,
+        )
+
+    # Open file-like object: buffer the raw bytes once, then derive both
+    # identities from the buffer so the source stream need not be re-readable.
+    position = path.tell() if path.seekable() else None
+    if position is not None:
+        path.seek(0)
+    raw = path.read()
+    if position is not None:
+        path.seek(position)
+
+    archive_digest = hashlib.sha256(raw).hexdigest()
+    archive_size = len(raw)
+    buffered = io.BytesIO(raw)
+    detected_format = format
+    if detected_format is None:
+        name = _filepath_from_path_or_filelike(path)
+        detected_format = _detect_format_from_extension(name)
+    if detected_format is None:
+        detected_format = _detect_format_from_content(buffered)
+    if detected_format is None:
+        return ArchiveIdentity(
+            archive_digest=archive_digest,
+            archive_size=archive_size,
+            content_digest=archive_digest,
+            content_size=archive_size,
+        )
+    content_digest, content_size = _hash_compressed(buffered, detected_format)
+    return ArchiveIdentity(
+        archive_digest=archive_digest,
+        archive_size=archive_size,
+        content_digest=content_digest,
+        content_size=content_size,
+    )
+
+
+def reproducible_gzip_conditions(compresslevel: int) -> ReproducibleGzipConditions:
+    """
+    Describe the full, fixed reproduction conditions of a reproducible gzip
+    write at a given compression level.
+
+    Use these conditions to make reproducibility explicit: with every field
+    held constant, :func:`xopen` (``mode="wb"``, ``threads=0``) emits the same
+    raw gzip bytes regardless of the output file name. The conditions pin the
+    header ``mtime`` (zero), the header original file name (empty) and the
+    in-process backend that is actually selected for this level, in addition
+    to the compression level.
+    """
+    if compresslevel not in range(10):
+        raise ValueError(
+            f"gzip compresslevel must be in range 0-9, got {compresslevel}."
+        )
+    return ReproducibleGzipConditions(
+        compresslevel=compresslevel,
+        mtime=0,
+        filename="",
+        backend=_reproducible_gzip_backend_name(compresslevel),
+    )
 
 
 @overload

@@ -169,6 +169,70 @@ depending on it <https://github.com/intel/isa-l/issues/140#issuecomment-63487796
 bzip2 and xz compression methods do not store timestamps in the file headers,
 so output from them is also reproducible.
 
+To make the reproduction conditions explicit, use
+``reproducible_gzip_conditions()``::
+
+    from xopen import reproducible_gzip_conditions, xopen
+
+    conditions = reproducible_gzip_conditions(compresslevel=6)
+
+It returns a frozen record of every parameter that, when held fixed, makes an
+in-process gzip write (``threads=0``) byte-for-byte reproducible:
+
+* the compression level,
+* the header modification time, always ``0``,
+* the header original file name, always the empty string,
+* the compression backend (``"gzip"``, ``"igzip"`` or ``"gzip_ng"``), because
+  different backends emit different deflate streams even at the same level.
+
+The target file name is intentionally not a reproduction condition. Since
+neither the original file name nor a modification time are embedded, writing
+the same data under different output file names produces identical bytes::
+
+    with xopen("first.gz", "wb", compresslevel=6, threads=0) as f:
+        f.write(data)
+    with xopen("a/different/name.gz", "wb", compresslevel=6, threads=0) as f:
+        f.write(data)
+    # The two files are byte-identical.
+
+
+Reconciliation identities
+-------------------------
+
+Switching the compression backend can produce two different on-disk gzip
+files for the very same record. To reconcile such archives, ``archive_identity()``
+returns two independently queryable identities::
+
+    from xopen import archive_identity
+
+    identity = archive_identity("record.gz")
+
+* ``identity.archive_digest`` (and ``archive_size``) identify the *raw archived
+  bytes*, that is the exact compressed file as stored. Two different gzip files
+  of the same record never share this identity.
+* ``identity.content_digest`` (and ``content_size``) identify the *fully
+  decompressed business bytes*. Archives produced by different backends share
+  this identity when they decode to the same record.
+
+Compare records with ``same_archive()`` and ``same_content()``::
+
+    left = archive_identity("one.gz")
+    right = archive_identity("two.gz")
+    assert not left.same_archive(right)  # different compressed bytes
+    assert left.same_content(right)      # but the same business record
+
+The content digest is only returned after the stream has been read to a clean
+end of stream, including the trailing checksum (the gzip CRC32/ISIZE trailer and
+the equivalent end markers of the other formats). A copy whose trailing
+checksum information has been truncated raises ``EOFError`` even when every
+already-decompressed prefix byte matched, so it can never be pronounced
+content-identical.
+
+``archive_identity()`` accepts a file name or an open binary file object, and an
+optional ``format`` argument that overrides autodetection. For an uncompressed
+file the archive and content identities coincide. File names are processed in a
+streaming fashion without loading the whole file into memory.
+
 
 Zstandard support
 -----------------
@@ -190,6 +254,15 @@ Changelog
 development version
 ~~~~~~~~~~~~~~~~~~~
 
+* Added ``archive_identity()`` and the ``ArchiveIdentity`` record, which expose
+  two independently queryable identities for an archived record: the raw
+  archived bytes and the fully decompressed business bytes. The content
+  identity is only computed after a clean end of stream, so a copy truncated in
+  its trailing checksum is never pronounced content-identical.
+* Added ``reproducible_gzip_conditions()`` and the
+  ``ReproducibleGzipConditions`` record describing the full set of fixed
+  parameters of a reproducible in-process gzip write. The target file name is
+  not part of those conditions.
 * #181/#168: Added lz4 as supported compression format.
   Contributed by @Dev-iL and @gnzsnz.
 * PipedCompressionReader no longer has seek/tell methods. This only worked
