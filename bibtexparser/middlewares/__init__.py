@@ -1,5 +1,10 @@
 from bibtexparser.middlewares.enclosing import AddEnclosingMiddleware
 from bibtexparser.middlewares.enclosing import RemoveEnclosingMiddleware
+from bibtexparser.middlewares.field_conflicts import FIELD_CONFLICTS_METADATA_KEY
+from bibtexparser.middlewares.field_conflicts import FieldConflict
+from bibtexparser.middlewares.field_conflicts import ResolveFieldConflictsMiddleware
+from bibtexparser.middlewares.field_conflicts import get_field_conflicts
+from bibtexparser.middlewares.field_conflicts import normalize_page_range
 from bibtexparser.middlewares.fieldkeys import NormalizeFieldKeys
 from bibtexparser.middlewares.interpolate import ResolveStringReferencesMiddleware
 from bibtexparser.middlewares.latex_encoding import LatexDecodingMiddleware
@@ -28,6 +33,8 @@ from .parsestack import default_unparse_stack
 __all__ = [
     "AddEnclosingMiddleware",
     "BlockMiddleware",
+    "FIELD_CONFLICTS_METADATA_KEY",
+    "FieldConflict",
     "LatexDecodingMiddleware",
     "LatexEncodingMiddleware",
     "LibraryMiddleware",
@@ -39,6 +46,7 @@ __all__ = [
     "NameParts",
     "NormalizeFieldKeys",
     "RemoveEnclosingMiddleware",
+    "ResolveFieldConflictsMiddleware",
     "ResolveStringReferencesMiddleware",
     "SeparateCoAuthors",
     "SortBlocksByTypeAndKeyMiddleware",
@@ -48,4 +56,6 @@ __all__ = [
     "SplitNameParts",
     "default_parse_stack",
     "default_unparse_stack",
+    "get_field_conflicts",
+    "normalize_page_range",
 ]

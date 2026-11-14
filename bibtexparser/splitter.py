@@ -9,6 +9,7 @@ from .model import DuplicateFieldKeyBlock
 from .model import Entry
 from .model import ExplicitComment
 from .model import Field
+from .model import FieldPosition
 from .model import ImplicitComment
 from .model import ParsingFailedBlock
 from .model import Preamble
@@ -277,8 +278,15 @@ class Splitter:
                     end_index=next_mark.start() - 1,
                 )
 
-    def _move_to_end_of_entry(self, first_key_start: int) -> tuple[list[Field], int, set[str]]:
-        """Move to the end of the entry and return the fields and the end index."""
+    def _move_to_end_of_entry(
+        self, first_key_start: int, entry_start: int
+    ) -> tuple[list[Field], int, set[str]]:
+        """Move to the end of the entry and return the fields and the end index.
+
+        `entry_start` is the index of the `@` opening the entry, so the
+        :class:`FieldPosition` spans stored on the fields are relative to the
+        entry's own `raw` text (which starts at that index).
+        """
         result = []
         keys = set()
         duplicate_keys = set()
@@ -315,13 +323,30 @@ class Splitter:
             )
 
             key = self.bibstr[key_start:key_end].strip()
-            value = self.bibstr[value_start:value_end].strip()
+            # Keep the value before trimming as provenance: it round-trips to the
+            # exact source span and is unaffected by later middleware.
+            raw_value = self.bibstr[value_start:value_end]
+            value = raw_value.strip()
+            position = FieldPosition(
+                key_start=key_start - entry_start,
+                key_end=key_end - entry_start,
+                value_start=value_start - entry_start,
+                value_end=value_end - entry_start,
+            )
 
             if key in keys:
                 duplicate_keys.add(key)
 
             keys.add(key)
-            result.append(Field(start_line=start_line, key=key, value=value))
+            result.append(
+                Field(
+                    start_line=start_line,
+                    key=key,
+                    value=value,
+                    position=position,
+                    raw_value=raw_value,
+                )
+            )
 
             # If next mark is a comma, continue
             after_field_mark = self._next_mark(accept_eof=False)
@@ -454,7 +479,9 @@ class Splitter:
             )
         else:
             key = self.bibstr[m.end() + 1 : comma_mark.start()].strip()
-            fields, end_index, duplicate_keys = self._move_to_end_of_entry(comma_mark.end())
+            fields, end_index, duplicate_keys = self._move_to_end_of_entry(
+                comma_mark.end(), entry_start=m.start()
+            )
 
         entry = Entry(
             start_line=start_line,

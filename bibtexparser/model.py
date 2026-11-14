@@ -1,4 +1,5 @@
 import abc
+import dataclasses
 from collections.abc import Iterator
 from typing import Any
 
@@ -237,6 +238,32 @@ class ImplicitComment(Block):
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class FieldPosition:
+    """The exact location of a field inside its entry's raw bibtex string.
+
+    Indices are relative to the containing entry's ``raw`` text and use the
+    usual Python half-open convention, so ``entry.raw[pos.value_start:pos.value_end]``
+    is the field value exactly as written (enclosing and surrounding whitespace
+    kept). Tracking spans rather than only the line makes duplicate fields with
+    the same key (e.g. both ``pages`` and ``PAGES``) individually addressable,
+    including when their values contain commas and nested braces.
+    """
+
+    key_start: int
+    key_end: int
+    value_start: int
+    value_end: int
+
+    def key_text(self, source: str) -> str:
+        """The field key as it appears in `source` (the entry raw text)."""
+        return source[self.key_start : self.key_end]
+
+    def value_text(self, source: str) -> str:
+        """The field value as it appears in `source` (the entry raw text)."""
+        return source[self.value_start : self.value_end]
+
+
 class Field:
     """A field of a Bibtex entry, e.g. ``author = {John Doe}``."""
 
@@ -246,11 +273,19 @@ class Field:
         value: Any,
         start_line: int | None = None,
         enclosing: str | None = None,
+        position: "FieldPosition | None" = None,
+        raw_value: str | None = None,
     ):
         self._start_line = start_line
         self._key = key
         self._value = value
         self._enclosing = _validated_enclosing(enclosing)
+        # Provenance, populated by the splitter. `_position` indices are relative
+        # to the containing entry's `raw`; `_raw_value` is the value before the
+        # splitter's `.strip()` (enclosing and surrounding whitespace kept).
+        # Both stay `None` for programmatically created fields.
+        self._position = position
+        self._raw_value = raw_value
 
     @property
     def key(self) -> str:
@@ -270,6 +305,22 @@ class Field:
     def value(self, value: Any):
         self._value = value
         self._enclosing = None
+
+    @property
+    def position(self) -> "FieldPosition | None":
+        """The exact span of this field in its entry's raw text, if parsed.
+
+        ``None`` for fields created programmatically. Indices are relative to
+        the containing entry's ``raw`` and stay valid even when several fields
+        share a key (e.g. ``pages`` and ``PAGES``), so each occurrence is
+        individually addressable.
+        """
+        return self._position
+
+    @property
+    def raw_value(self) -> str | None:
+        """The field value exactly as written (untrimmed, enclosing kept), if parsed."""
+        return self._raw_value
 
     @property
     def enclosing(self) -> str | None:
@@ -297,11 +348,17 @@ class Field:
         return self._start_line
 
     def __eq__(self, other: object) -> bool:
-        # make sure they have the same type and same content
+        # make sure they have the same type and same content.
+        # Provenance (`_position`, `_raw_value`) is deliberately excluded: it is
+        # only populated by the splitter, and a parsed field must stay equal to
+        # an identically constructed one.
+        if not (isinstance(other, self.__class__) and isinstance(self, other.__class__)):
+            return False
         return (
-            isinstance(other, self.__class__)
-            and isinstance(self, other.__class__)
-            and self.__dict__ == other.__dict__
+            self._start_line == other._start_line
+            and self._key == other._key
+            and self._value == other._value
+            and self._enclosing == other._enclosing
         )
 
     def __hash__(self) -> int:
