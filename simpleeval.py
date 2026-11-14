@@ -920,6 +920,7 @@ class EvalWithCompoundTypes(SimpleEval):
                 ast.ListComp: self._eval_comprehension,
                 ast.GeneratorExp: self._eval_comprehension,
                 ast.DictComp: self._eval_comprehension,
+                ast.SetComp: self._eval_comprehension,
             }
         )
 
@@ -960,6 +961,8 @@ class EvalWithCompoundTypes(SimpleEval):
     def _eval_comprehension(self, node):
         if isinstance(node, ast.DictComp):
             to_return = {}
+        elif isinstance(node, ast.SetComp):
+            to_return = set()
         else:
             to_return = []
 
@@ -984,9 +987,33 @@ class EvalWithCompoundTypes(SimpleEval):
             """
             if isinstance(target, ast.Name):
                 extra_names[target.id] = value
+            elif isinstance(target, ast.Starred):
+                recurse_targets(target.value, list(value))
             else:
-                for t, v in zip(target.elts, value):
-                    recurse_targets(t, v)
+                starred = next(
+                    (idx for idx, t in enumerate(target.elts) if isinstance(t, ast.Starred)),
+                    None,
+                )
+                if starred is None:
+                    for t, v in zip(target.elts, value):
+                        recurse_targets(t, v)
+                else:
+                    # a starred target needs the whole sequence up front, so
+                    # materialise any (potentially unsized) iterable once
+                    value = list(value)
+                    minimum = len(target.elts) - 1  # every non-starred target needs a value
+                    if len(value) < minimum:
+                        raise ValueError(
+                            f"not enough values to unpack (expected at least "
+                            f"{minimum}, got {len(value)})"
+                        )
+                    n_suffix = len(target.elts) - starred - 1
+                    split = len(value) - n_suffix
+                    for t, v in zip(target.elts[:starred], value[:starred]):
+                        recurse_targets(t, v)
+                    recurse_targets(target.elts[starred], value[starred:split])
+                    for t, v in zip(target.elts[starred + 1 :], value[split:]):
+                        recurse_targets(t, v)
 
         def do_generator(gi=0):
             g = node.generators[gi]
@@ -1002,7 +1029,9 @@ class EvalWithCompoundTypes(SimpleEval):
                     else:
                         if isinstance(to_return, dict):
                             to_return[self._eval(node.key)] = self._eval(node.value)
-                        elif isinstance(to_return, list):
+                        elif isinstance(to_return, set):
+                            to_return.add(self._eval(node.elt))
+                        else:
                             to_return.append(self._eval(node.elt))
 
         try:

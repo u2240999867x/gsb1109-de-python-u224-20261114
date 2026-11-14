@@ -53,6 +53,95 @@ class TestComprehensions(DRYTest):
     def test_dictcomp_nested_unpack(self):
         self.t("{a:a+b+c for a, (b, c) in ((1,(1,1)),(3,(2,2)))}", {1: 3, 3: 7})
 
+    def test_setcomp_basic(self):
+        self.t("{a for a in [1, 2, 2, 3, 3, 3]}", {1, 2, 3})
+
+    def test_setcomp_with_if(self):
+        self.s.functions = {"range": range}
+        self.t("{a for a in range(6) if a % 2 == 0}", {0, 2, 4})
+
+    def test_setcomp_unpack(self):
+        self.t("{b for a, b in ((1, 2), (3, 2), (4, 5))}", {2, 5})
+
+    def test_setcomp_nested(self):
+        self.t("[{b for b in row} for row in [[1, 1], [2, 3]]]", [{1}, {2, 3}])
+
+    def test_starred_target(self):
+        self.t("[rest for a, *rest in ((1, 2, 3), (4, 5))]", [[2, 3], [5]])
+
+    def test_starred_target_leading(self):
+        self.t("[head for *head, tail in ((1, 2, 3), (4, 5))]", [[1, 2], [4]])
+
+    def test_starred_target_with_trailing(self):
+        self.t("[(a, m, z) for a, *m, z in ((1, 2, 3, 4),)]", [(1, [2, 3], 4)])
+
+    def test_starred_target_nested(self):
+        self.t(
+            "[(a, cs) for a, (*cs,) in ((1, (2, 3)), (4, (5,)))]",
+            [(1, [2, 3]), (4, [5])],
+        )
+
+    def test_starred_target_unsized_iterable(self):
+        self.s.functions = {"iter": iter}
+        self.t(
+            "[rest for a, *rest in (iter((1, 2, 3)), iter((4, 5)))]",
+            [[2, 3], [5]],
+        )
+
+    def test_starred_target_too_few_values(self):
+        with self.assertRaises(ValueError):
+            self.s.eval("[rest for a, *rest, z in ((1,),)]")
+        # the failed run must not leave its loop targets behind
+        for leaked in ("a", "rest", "z"):
+            with self.assertRaises(simpleeval.NameNotDefined):
+                self.s.eval(leaked)
+
+    def test_duplicate_values_keep_distinct_paths(self):
+        # equal item values still produce one row per (package, item) path
+        order = {
+            "target": "X",
+            "packages": [
+                {"items": [{"code": "X"}, {"code": "Y"}]},
+                {"items": [{"code": "X"}, {"code": "X"}]},
+            ],
+        }
+        self.s.names = {"order": order}
+        expr = (
+            "[(p, i) for p, pkg in enumerate(order['packages']) "
+            "for i, item in enumerate(pkg['items']) if item['code'] == order['target']]"
+        )
+        self.s.functions["enumerate"] = enumerate
+        self.t(expr, [(0, 0), (1, 0), (1, 1)])
+
+    def test_inner_name_restored_after_nested_comprehension(self):
+        self.s.functions = {"range": range}
+        self.t(
+            "[(a, [a for a in range(2)], a) for a in range(2)]",
+            [(0, [0, 1], 0), (1, [0, 1], 1)],
+        )
+
+    def test_root_name_shadowed_then_restored(self):
+        self.s.names = {"a": 99}
+        self.t("[a for a in [1, 2, 3]]", [1, 2, 3])
+        self.t("a", 99)
+
+    def test_no_residual_bindings_after_error(self):
+        self.s.functions = {"range": range}
+        with self.assertRaises(ZeroDivisionError):
+            self.s.eval("[a for a in range(3) if 1 / (1 - (1 if a == 1 else 0))]")
+
+        # the partial run must not leak its loop target, and a fresh order works
+        with self.assertRaises(simpleeval.NameNotDefined):
+            self.s.eval("a")
+        self.t("[a * 2 for a in range(4)]", [0, 2, 4, 6])
+
+    def test_no_residual_bindings_after_starred_error(self):
+        with self.assertRaises(simpleeval.NameNotDefined):
+            self.s.eval("[rest for a, *rest in ((1, 2), (3, 4, 5)) if not undefined_thing]")
+        for leaked in ("a", "rest"):
+            with self.assertRaises(simpleeval.NameNotDefined):
+                self.s.eval(leaked)
+
     def test_other_places(self):
         self.s.functions = {"sum": sum}
         self.t("sum([a+1 for a in [1,2,3,4,5]])", 20)

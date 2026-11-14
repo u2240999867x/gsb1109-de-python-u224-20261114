@@ -398,7 +398,10 @@ you pass them in as named objects.  If you want to allow creation of these, the
 that.
 
 The ``EvalWithCompoundTypes`` class also contains support for simple comprehensions.
-eg: ``[x + 1 for x in [1,2,3]]``.  There's a safety `MAX_COMPREHENSION_LENGTH` to control
+eg: ``[x + 1 for x in [1,2,3]]``, including set comprehensions
+(``{x for x in [1, 2, 2]}``) and starred unpacking in the loop target
+(``[rest for first, *rest in ((1, 2, 3),)]``).
+There's a safety `MAX_COMPREHENSION_LENGTH` to control
 how many items it'll allow before bailing too.  This also takes into account nested
 comprehensions.
 
