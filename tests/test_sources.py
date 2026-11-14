@@ -7,7 +7,7 @@ from hashlib import sha256
 import pytest
 
 from installer.exceptions import InstallerError
-from installer.records import parse_record_file
+from installer.records import RecordStatus, parse_record_file
 from installer.sources import WheelFile, WheelSource
 
 
@@ -361,3 +361,142 @@ class TestWheelFile:
             ),
         ):
             source.validate_record(validate_contents=True)
+
+    def test_blank_size_is_reported_absent_not_zero(self, fancy_wheel):
+        with WheelFile.open(fancy_wheel) as source:
+            record_file_contents = source.read_dist_info("RECORD")
+
+        new_lines = []
+        for line in record_file_contents.split("\n"):
+            if not line:
+                continue
+            filename, hash_, size = line.split(",")
+            if filename == "fancy/__init__.py":
+                size = ""
+            new_lines.append(f"{filename},{hash_},{size}")
+
+        replace_file_in_zip(
+            fancy_wheel,
+            filename="fancy-1.0.0.dist-info/RECORD",
+            content="\n".join(new_lines),
+        )
+
+        with WheelFile.open(fancy_wheel) as source:
+            results = {
+                result.path: result
+                for result in source.iter_record_validation(validate_contents=False)
+            }
+
+        blank_size = results["fancy/__init__.py"]
+        assert blank_size.status is RecordStatus.ABSENT
+        assert blank_size.declared_size is None
+        assert blank_size.size_declared is False
+        assert results["fancy-1.0.0.dist-info/RECORD"].status is RecordStatus.ABSENT
+
+    def test_zero_byte_file_with_wrong_hash_still_fails(self, fancy_wheel):
+        replace_file_in_zip(
+            fancy_wheel,
+            filename="fancy-1.0.0.dist-info/top_level.txt",
+            content="",
+        )
+        with WheelFile.open(fancy_wheel) as source:
+            record_file_contents = source.read_dist_info("RECORD")
+
+        new_lines = []
+        for line in record_file_contents.split("\n"):
+            if not line:
+                continue
+            filename, hash_, size = line.split(",")
+            if filename == "fancy-1.0.0.dist-info/top_level.txt":
+                new_lines.append(f"{filename},{hash_},0")
+            else:
+                new_lines.append(f"{filename},{hash_},{size}")
+
+        replace_file_in_zip(
+            fancy_wheel,
+            filename="fancy-1.0.0.dist-info/RECORD",
+            content="\n".join(new_lines),
+        )
+
+        with (
+            WheelFile.open(fancy_wheel) as source,
+            pytest.raises(
+                WheelFile.validation_error,
+                match=r"hash / size of .+ didn't match RECORD",
+            ),
+        ):
+            source.validate_record(validate_contents=True)
+
+    def test_duplicate_identical_declarations_keep_both_origins(self, fancy_wheel):
+        with WheelFile.open(fancy_wheel) as source:
+            record_file_contents = source.read_dist_info("RECORD")
+
+        target_line = next(
+            line
+            for line in record_file_contents.split("\n")
+            if line.startswith("fancy/__init__.py,")
+        )
+        replace_file_in_zip(
+            fancy_wheel,
+            filename="fancy-1.0.0.dist-info/RECORD",
+            content=record_file_contents.rstrip("\n") + "\n" + target_line,
+        )
+
+        with WheelFile.open(fancy_wheel) as source:
+            results = {
+                result.path: result for result in source.iter_record_validation()
+            }
+
+        result = results["fancy/__init__.py"]
+        assert result.status is RecordStatus.VERIFIED
+        assert len(result.occurrences) == 2
+        assert [o.line_number for o in result.occurrences] == [1, 9]
+
+    def test_conflicting_duplicate_declarations_fail(self, fancy_wheel):
+        with WheelFile.open(fancy_wheel) as source:
+            record_file_contents = source.read_dist_info("RECORD")
+
+        target_line = next(
+            line
+            for line in record_file_contents.split("\n")
+            if line.startswith("fancy/__init__.py,")
+        )
+        conflicting = target_line.rsplit(",", 1)[0] + ",1"
+        replace_file_in_zip(
+            fancy_wheel,
+            filename="fancy-1.0.0.dist-info/RECORD",
+            content=record_file_contents.rstrip("\n") + "\n" + conflicting,
+        )
+
+        with (
+            WheelFile.open(fancy_wheel) as source,
+            pytest.raises(
+                WheelFile.validation_error, match="conflicting RECORD entries"
+            ),
+        ):
+            source.validate_record(validate_contents=False)
+
+    def test_record_entry_for_missing_file_is_reported(self, fancy_wheel):
+        with WheelFile.open(fancy_wheel) as source:
+            record_file_contents = source.read_dist_info("RECORD")
+
+        extra_line = f"fancy/missing.py,sha256={'A' * 43},10"
+        replace_file_in_zip(
+            fancy_wheel,
+            filename="fancy-1.0.0.dist-info/RECORD",
+            content=record_file_contents.rstrip("\n") + "\n" + extra_line,
+        )
+
+        with WheelFile.open(fancy_wheel) as source:
+            results = source.validate_record_entries(validate_contents=False)
+
+        missing = {r.path: r for r in results}["fancy/missing.py"]
+        assert missing.status is RecordStatus.MISMATCH
+        assert any("not present in the wheel" in issue for issue in missing.issues)
+
+    def test_validate_record_entries_returns_all_results(self, fancy_wheel):
+        with WheelFile.open(fancy_wheel) as source:
+            results = source.validate_record_entries(validate_contents=False)
+
+        assert results
+        assert all(result.status is not RecordStatus.MISMATCH for result in results)

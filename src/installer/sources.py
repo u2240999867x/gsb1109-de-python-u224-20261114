@@ -15,7 +15,14 @@ from typing import (
 )
 
 from installer.exceptions import InstallerError
-from installer.records import InvalidRecordEntry, RecordEntry, parse_record_file
+from installer.records import (
+    InvalidRecordEntry,
+    RecordStatus,
+    RecordValidationResult,
+    group_record_rows,
+    parse_record_rows,
+    validate_record_entry,
+)
 from installer.utils import canonicalize_name, parse_wheel_filename
 
 if TYPE_CHECKING:
@@ -241,73 +248,233 @@ class WheelFile(WheelSource):
 
         :param validate_contents: Whether to validate content integrity.
         """
+        issues = [
+            issue
+            for result in self.iter_record_validation(
+                validate_contents=validate_contents
+            )
+            for issue in result.issues
+        ]
+        if issues:
+            raise _WheelFileValidationError(issues)
+
+    def iter_record_validation(
+        self, *, validate_contents: bool = True
+    ) -> Iterator[RecordValidationResult]:
+        """Validate each file in the wheel, yielding structured results.
+
+        Each result reports one file with a :class:`RecordStatus`:
+
+        - ``ABSENT``: RECORD does not declare the hash and/or size (a blank
+          cell), or the file has no RECORD entry at all.
+        - ``VERIFIED``: every declaration present in RECORD matches the file.
+        - ``MISMATCH``: a present declaration does not match, declarations
+          conflict, or the entry itself is invalid.
+
+        The original path spelling and every declaration's origin are retained
+        in each result. Duplicate rows with the same declaration are reported as
+        multiple origins; duplicate rows with different declarations are a
+        mismatch and never resolved by taking the last row.
+
+        :param validate_contents: Whether to read file contents for validation.
+        """
         try:
             record_lines = self.read_dist_info("RECORD").splitlines()
-            record_mapping = {
-                record[0]: record for record in parse_record_file(record_lines)
-            }
+            groups = group_record_rows(parse_record_rows(record_lines))
         except Exception as exc:
             raise _WheelFileValidationError(
                 [f"Unable to retrieve `RECORD` from {self._zipfile.filename}: {exc!r}"]
             ) from exc
 
-        issues: list[str] = []
+        record_path = f"{self.dist_info_dir}/RECORD"
+        signature_names = ("RECORD.p7s", "RECORD.jws")
+        seen_paths: set[str] = set()
 
         for item in self._zipfile.infolist():
             if item.filename[-1:] == "/":  # looks like a directory
                 continue
 
-            record_args = record_mapping.pop(item.filename, None)
+            group = groups.get(item.filename)
+            seen_paths.add(item.filename)
 
-            if self.dist_info_dir == posixpath.commonpath(
-                [self.dist_info_dir, item.filename]
-            ) and item.filename.split("/")[-1] in ("RECORD.p7s", "RECORD.jws"):
-                # both are for digital signatures, and not mentioned in RECORD
-                if record_args is not None:
-                    # Incorrectly contained
-                    issues.append(
-                        f"In {self._zipfile.filename}, digital signature file {item.filename} is incorrectly contained in RECORD."
+            if (
+                self.dist_info_dir
+                == posixpath.commonpath([self.dist_info_dir, item.filename])
+                and item.filename.split("/")[-1] in signature_names
+            ):
+                # Both are for digital signatures, and not mentioned in RECORD.
+                if group is not None:
+                    yield RecordValidationResult(
+                        path=item.filename,
+                        raw_path=group.raw_paths[0],
+                        status=RecordStatus.MISMATCH,
+                        occurrences=group.occurrences,
+                        issues=(
+                            f"In {self._zipfile.filename}, digital signature file "
+                            f"{item.filename} is incorrectly contained in RECORD.",
+                        ),
+                    )
+                else:
+                    yield RecordValidationResult(
+                        path=item.filename,
+                        raw_path=item.filename,
+                        status=RecordStatus.ABSENT,
                     )
                 continue
 
-            if record_args is None:
-                issues.append(
-                    f"In {self._zipfile.filename}, {item.filename} is not mentioned in RECORD"
+            if group is None:
+                yield RecordValidationResult(
+                    path=item.filename,
+                    raw_path=item.filename,
+                    status=RecordStatus.ABSENT,
+                    issues=(
+                        f"In {self._zipfile.filename}, {item.filename} is not "
+                        "mentioned in RECORD",
+                    ),
+                )
+                continue
+
+            if group.conflicting:
+                declarations = "; ".join(
+                    f"{occurrence.line_number}:{occurrence.declaration!r}"
+                    for occurrence in group.occurrences
+                )
+                yield RecordValidationResult(
+                    path=item.filename,
+                    raw_path=group.raw_paths[0],
+                    status=RecordStatus.MISMATCH,
+                    occurrences=group.occurrences,
+                    issues=(
+                        f"In {self._zipfile.filename}, conflicting RECORD entries "
+                        f"for {item.filename}: {declarations}",
+                    ),
                 )
                 continue
 
             try:
-                record = RecordEntry.from_elements(*record_args)
-            except InvalidRecordEntry as e:
-                for issue in e.issues:
-                    issues.append(
+                record = group.require_entry()
+            except InvalidRecordEntry as exc:
+                yield RecordValidationResult(
+                    path=item.filename,
+                    raw_path=group.raw_paths[0],
+                    status=RecordStatus.MISMATCH,
+                    occurrences=group.occurrences,
+                    issues=tuple(
                         f"In {self._zipfile.filename}, entry in RECORD file for "
                         f"{item.filename} is invalid: {issue}"
+                        for issue in exc.issues
+                    ),
+                )
+                continue
+
+            if item.filename == record_path:
+                # RECORD must not contain its own hash / size.
+                if record.hash_ is not None or record.size is not None:
+                    yield RecordValidationResult(
+                        path=item.filename,
+                        raw_path=group.raw_paths[0],
+                        status=RecordStatus.MISMATCH,
+                        entry=record,
+                        occurrences=group.occurrences,
+                        issues=(
+                            f"In {self._zipfile.filename}, RECORD file incorrectly "
+                            "contains hash / size.",
+                        ),
+                    )
+                else:
+                    yield RecordValidationResult(
+                        path=item.filename,
+                        raw_path=group.raw_paths[0],
+                        status=RecordStatus.ABSENT,
+                        entry=record,
+                        occurrences=group.occurrences,
                     )
                 continue
 
-            if item.filename == f"{self.dist_info_dir}/RECORD":
-                # Assert that RECORD doesn't have size and hash.
-                if record.hash_ is not None or record.size is not None:
-                    # Incorrectly contained hash / size
-                    issues.append(
-                        f"In {self._zipfile.filename}, RECORD file incorrectly contains hash / size."
-                    )
-                continue
-            if record.hash_ is None or record.size is None:
-                # Report empty hash / size
-                issues.append(
-                    f"In {self._zipfile.filename}, hash / size of {item.filename} is not included in RECORD"
-                )
+            declared_absent = record.hash_ is None or record.size is None
             if validate_contents:
                 with self._zipfile.open(item, "r") as stream:
-                    if not record.validate_stream(cast("BinaryIO", stream)):
-                        issues.append(
-                            f"In {self._zipfile.filename}, hash / size of {item.filename} didn't match RECORD"
+                    result = validate_record_entry(
+                        record,
+                        cast("BinaryIO", stream),
+                        raw_path=group.raw_paths[0],
+                        occurrences=group.occurrences,
+                    )
+                issues = []
+                if declared_absent:
+                    issues.append(
+                        f"In {self._zipfile.filename}, hash / size of "
+                        f"{item.filename} is not included in RECORD"
+                    )
+                if result.mismatched:
+                    issues.append(
+                        f"In {self._zipfile.filename}, hash / size of "
+                        f"{item.filename} didn't match RECORD"
+                    )
+                if issues:
+                    yield RecordValidationResult(
+                        path=result.path,
+                        raw_path=result.raw_path,
+                        status=(
+                            RecordStatus.MISMATCH
+                            if result.mismatched
+                            else result.status
+                        ),
+                        entry=result.entry,
+                        occurrences=result.occurrences,
+                        actual_hash=result.actual_hash,
+                        actual_size=result.actual_size,
+                        hash_status=result.hash_status,
+                        size_status=result.size_status,
+                        issues=tuple(issues),
+                    )
+                else:
+                    yield result
+            else:
+                yield RecordValidationResult(
+                    path=record.path,
+                    raw_path=group.raw_paths[0],
+                    status=(
+                        RecordStatus.ABSENT
+                        if declared_absent
+                        else RecordStatus.VERIFIED
+                    ),
+                    entry=record,
+                    occurrences=group.occurrences,
+                    issues=(
+                        (
+                            f"In {self._zipfile.filename}, hash / size of "
+                            f"{item.filename} is not included in RECORD",
                         )
+                        if declared_absent
+                        else ()
+                    ),
+                )
 
-        if issues:
-            raise _WheelFileValidationError(issues)
+        for path, group in groups.items():
+            if path in seen_paths:
+                continue
+            yield RecordValidationResult(
+                path=path,
+                raw_path=group.raw_paths[0],
+                status=RecordStatus.MISMATCH,
+                occurrences=group.occurrences,
+                issues=(
+                    f"In {self._zipfile.filename}, {path} is declared in RECORD "
+                    "but is not present in the wheel",
+                ),
+            )
+
+    def validate_record_entries(
+        self, *, validate_contents: bool = True
+    ) -> list[RecordValidationResult]:
+        """Return structured validation results for every RECORD entry.
+
+        Unlike :py:meth:`validate_record`, this does not raise on problems; the
+        caller can inspect each result's status and issues. The results are a
+        list snapshot of :py:meth:`iter_record_validation`.
+        """
+        return list(self.iter_record_validation(validate_contents=validate_contents))
 
     def get_contents(self) -> Iterator[WheelContentElement]:
         """Sequential access to all contents of the wheel (including dist-info files).
@@ -316,17 +483,27 @@ class WheelFile(WheelSource):
         archive has a corresponding entry in RECORD. If they are not, an
         :any:`AssertionError` will be raised.
         """
-        # Convert the record file into a useful mapping
+        # Group rows by normalized path so duplicates are not resolved by the
+        # last row. Identical duplicates are equivalent; conflicting ones raise.
         record_lines = self.read_dist_info("RECORD").splitlines()
-        records = parse_record_file(record_lines)
-        record_mapping = {record[0]: record for record in records}
+        record_groups = group_record_rows(parse_record_rows(record_lines))
 
         for item in self._zipfile.infolist():
             if item.filename[-1:] == "/":  # looks like a directory
                 continue
 
-            # Pop record with empty default, because validation is handled by `validate_record`
-            record = record_mapping.pop(item.filename, (item.filename, "", ""))
+            # Default to an empty declaration, because validation is handled by
+            # `validate_record`.
+            group = record_groups.get(item.filename)
+            if group is None:
+                record = (item.filename, "", "")
+            else:
+                entry = group.require_entry()
+                record = (
+                    entry.path,
+                    str(entry.hash_ or ""),
+                    str(entry.size) if entry.size is not None else "",
+                )
 
             # Borrowed from:
             # https://github.com/pypa/pip/blob/0f21fb92/src/pip/_internal/utils/unpacking.py#L96-L100

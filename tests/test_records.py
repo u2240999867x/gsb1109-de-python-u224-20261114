@@ -3,7 +3,16 @@ from pathlib import Path
 
 import pytest
 
-from installer.records import Hash, InvalidRecordEntry, RecordEntry, parse_record_file
+from installer.records import (
+    ConflictingRecordEntry,
+    Hash,
+    InvalidRecordEntry,
+    RecordEntry,
+    RecordStatus,
+    group_record_rows,
+    parse_record_file,
+    parse_record_rows,
+)
 
 
 #
@@ -301,3 +310,125 @@ class TestParseRecordFile:
         assert records == [
             ("distribution-1.0.dist-info/RECORD", "", ""),
         ]
+
+
+class TestStructuredValidation:
+    def test_blank_size_is_absent_not_zero(self):
+        record = RecordEntry.from_elements("empty.bin", "", "")
+        result = record.validation_result(b"")
+
+        assert result.status is RecordStatus.ABSENT
+        assert result.size_declared is False
+        assert result.declared_size is None
+        assert result.actual_size == 0
+        assert result.size_status is RecordStatus.ABSENT
+        assert result.ok
+
+    def test_declared_zero_size_is_verified(self):
+        record = RecordEntry.from_elements(
+            "empty.bin", "sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU", "0"
+        )
+        result = record.validation_result(b"")
+
+        assert result.status is RecordStatus.VERIFIED
+        assert result.size_declared is True
+        assert result.declared_size == 0
+        assert result.actual_size == 0
+        assert result.size_status is RecordStatus.VERIFIED
+
+    def test_declared_zero_size_mismatch(self):
+        record = RecordEntry.from_elements("empty.bin", "", "0")
+        result = record.validation_result(b"not empty")
+
+        assert result.status is RecordStatus.MISMATCH
+        assert result.size_status is RecordStatus.MISMATCH
+
+    def test_zero_byte_file_with_wrong_hash_is_mismatch(self):
+        record = RecordEntry.from_elements(
+            "empty.bin", "sha256=AVTFPZpEKzuHr7OvQZmhaU3LvwKz06AJw8mT_pNh2yI", "0"
+        )
+        result = record.validation_result(b"")
+
+        assert result.status is RecordStatus.MISMATCH
+        assert result.hash_status is RecordStatus.MISMATCH
+        assert result.size_status is RecordStatus.VERIFIED
+
+    def test_hash_declared_size_blank_still_verifies_hash(self):
+        record = RecordEntry.from_elements(
+            "file.bin", "sha256=Y0sCextp4SQtQNU-MSs7SsdxD1W-gfKJtUlEbvZ3i-4", ""
+        )
+        result = record.validation_result(b"test1\n")
+
+        assert result.status is RecordStatus.ABSENT
+        assert result.hash_status is RecordStatus.VERIFIED
+        assert result.size_status is RecordStatus.ABSENT
+        assert result.hash_declared is True
+        assert result.size_declared is False
+
+    def test_validation_result_keeps_raw_path(self):
+        rows = list(
+            parse_record_rows(
+                [
+                    "dist-info\\FILE.bin,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0"
+                ]
+            )
+        )
+        entry = rows[0].to_entry()
+        result = entry.validation_result(b"")
+
+        assert rows[0].raw_path == "dist-info\\FILE.bin"
+        assert rows[0].path == "dist-info/FILE.bin"
+        assert result.path == "dist-info/FILE.bin"
+        assert result.raw_path == "dist-info\\FILE.bin"
+        assert result.status is RecordStatus.VERIFIED
+
+
+class TestRecordGroups:
+    def test_identical_duplicates_keep_both_origins(self):
+        rows = list(
+            parse_record_rows(
+                [
+                    "file.bin,sha256=ABC,0",
+                    "file.bin,sha256=ABC,0",
+                ]
+            )
+        )
+        groups = group_record_rows(rows)
+
+        assert list(groups) == ["file.bin"]
+        group = groups["file.bin"]
+        assert group.conflicting is False
+        assert len(group.occurrences) == 2
+        assert [o.line_number for o in group.occurrences] == [1, 2]
+        assert group.declarations == (("sha256=ABC", "0"),)
+
+    def test_conflicting_duplicates_are_not_last_wins(self):
+        rows = list(
+            parse_record_rows(
+                [
+                    "file.bin,sha256=ABC,0",
+                    "file.bin,sha256=XYZ,10",
+                ]
+            )
+        )
+        group = group_record_rows(rows)["file.bin"]
+
+        assert group.conflicting is True
+        assert len(group.declarations) == 2
+        with pytest.raises(ConflictingRecordEntry) as exc_info:
+            group.require_entry()
+        assert exc_info.value.issues
+        assert "conflicting" in str(exc_info.value)
+
+    def test_blank_size_and_zero_size_conflict(self):
+        rows = list(
+            parse_record_rows(
+                [
+                    "file.bin,sha256=ABC,",
+                    "file.bin,sha256=ABC,0",
+                ]
+            )
+        )
+        group = group_record_rows(rows)["file.bin"]
+
+        assert group.conflicting is True
