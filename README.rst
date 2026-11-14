@@ -184,11 +184,49 @@ the ``compression.zstd`` module in the standard library is used.
   the ``backports.zstd`` or ``compression.zstd`` package is used.
 
 
+Reconstructing aligned record volumes
+-------------------------------------
+
+Some devices write the time and value columns into two independently
+compressed volumes whose boundaries do not coincide. Each row then only
+carries a one-byte wrapping counter (0..255), while the volume headers
+occasionally provide a complete absolute sequence number (an *anchor*).
+The :mod:`xopen.sequence` module joins such volumes back into events in a
+single sequential pass, tolerating a configurable number of missing or
+retransmitted rows::
+
+    from xopen import xopen
+    from xopen.sequence import Observation, align_events
+
+    def read_volume(path):
+        with xopen(path, "rt") as handle:
+            for line in handle:
+                counter, value, *anchor = line.rstrip("\n").split(",")
+                yield Observation(
+                    int(counter), value, int(anchor[0]) if anchor else None
+                )
+
+    for event in align_events(read_volume("times.gz"), read_volume("values.gz"), max_gap=2):
+        ...  # event.time, event.value and event.status
+
+A repeated counter is treated as a retransmission of the same absolute
+sequence number, so a duplicated ``255`` never shifts the rows after the
+wrap. Regions that cannot be aligned uniquely (for example an unanchored
+region spanning a full counter cycle) are emitted with status
+``Event.AMBIGUOUS`` for manual review; the next anchor always restores
+unambiguous reconstruction for the rows that follow. Rows present on only
+one side are emitted as ``Event.MISSING_TIME`` or ``Event.MISSING_VALUE``.
+
+
 Changelog
 ---------
 
 development version
 ~~~~~~~~~~~~~~~~~~~
+
+* Added the ``xopen.sequence`` module for joining two independently
+  compressed record volumes with wrapping counters and occasional
+  sequence-number anchors into aligned events.
 
 * #181/#168: Added lz4 as supported compression format.
   Contributed by @Dev-iL and @gnzsnz.
