@@ -1,3 +1,6 @@
+import io
+import zipfile
+
 from mammoth import zips
 from .testing import assert_equal
 
@@ -29,3 +32,18 @@ def test_when_joining_paths_then_absolute_paths_ignore_earlier_paths():
     assert_equal("/b/c", zips.join_path("a", "/b", "c"))
     assert_equal("/b", zips.join_path("/a", "/b"))
     assert_equal("/a", zips.join_path("/a"))
+
+
+def test_names_returns_every_entry_in_the_archive():
+    fileobj = io.BytesIO()
+    archive = zipfile.ZipFile(fileobj, "w")
+    archive.writestr("word/document.xml", " ")
+    archive.writestr("word/_rels/document.xml.rels", " ")
+    archive.close()
+    fileobj.seek(0)
+
+    with zips.open_zip(fileobj, "r") as zip_file:
+        assert_equal(
+            ["word/document.xml", "word/_rels/document.xml.rels"],
+            zip_file.names(),
+        )
