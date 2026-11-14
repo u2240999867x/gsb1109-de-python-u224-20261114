@@ -5,6 +5,14 @@ import json
 import sys
 from builtins import super
 
+from radon.cli.cache import (
+    ResultCache,
+    cc_block_to_data,
+    data_to_cc_block,
+    data_to_halstead,
+    digest_text,
+    halstead_to_data,
+)
 from radon.cli.colors import MI_RANKS, RANKS_COLORS, RESET
 from radon.cli.tools import (
     _open,
@@ -23,6 +31,7 @@ from radon.complexity import (
     cc_visit,
     sorted_results,
 )
+import radon.complexity as cc_mod
 from radon.metrics import h_visit, mi_rank, mi_visit
 from radon.raw import analyze
 
@@ -65,11 +74,15 @@ class Harvester(object):
 
         *paths* is a list of paths to analyze.
         *config* is a :class:`~radon.cli.Config` object holding the
-        configuration values specific to the Harvester.
+        configuration values specific to the Harvester. If it contains a
+        *cache_file* value, results are cached there and reused across runs
+        for files whose content did not change.
         '''
         self.paths = paths
         self.config = config
         self._results = []
+        cache_file = getattr(config, 'cache_file', None)
+        self.cache = ResultCache(cache_file) if cache_file else None
 
     def _iter_filenames(self):
         '''A wrapper around :func:`~radon.cli.tools.iter_filenames`.'''
@@ -85,6 +98,59 @@ class Harvester(object):
         preferably a dictionary.
         '''
         raise NotImplementedError
+
+    def cache_params(self):
+        '''Return a tuple of ``(name, value)`` pairs describing the
+        configuration values that influence the analysis results. Subclasses
+        should override this method. It is used to build the cache key, so
+        that results computed under different settings never collide.
+        '''
+        return ()
+
+    @property
+    def cache_key(self):
+        '''The key under which results of this Harvester are cached.'''
+        parts = [type(self).__name__]
+        parts.extend(
+            '{0}={1!r}'.format(name, value)
+            for name, value in self.cache_params()
+        )
+        return '|'.join(parts)
+
+    def to_cache(self, result):
+        '''Convert an analysis result into a JSON-serializable value.'''
+        return result
+
+    def from_cache(self, data):
+        '''Rebuild an analysis result from its cached value.'''
+        return data
+
+    def _gobble_text(self, text):
+        '''Analyze *text*, reusing the cached result when possible.
+
+        The cache is keyed by the content digest, so renamed files are
+        reused, while the file list (and therefore exclusions) is always
+        recomputed from the current paths.
+        '''
+        if self.cache is None:
+            return self.gobble(StringIO(text))
+        digest = digest_text(text)
+        key = self.cache_key
+        cached = self.cache.get(digest, key)
+        if cached is not None:
+            return self.from_cache(cached)
+        result = self.gobble(StringIO(text))
+        try:
+            self.cache.set(digest, key, self.to_cache(result))
+        except (TypeError, ValueError):
+            # The result is not serializable: skip caching it.
+            pass
+        return result
+
+    def _save_cache(self):
+        '''Persist the result cache, if one is configured.'''
+        if self.cache is not None:
+            self.cache.save()
 
     def run(self):
         '''Start the analysis. For every file, this method calls the
@@ -106,10 +172,7 @@ class Harvester(object):
                             ]
                             # Whole document
                             doc = "\n".join(cells)
-                            yield (
-                                name,
-                                self.gobble(StringIO(strip_ipython(doc))),
-                            )
+                            yield (name, self._gobble_text(strip_ipython(doc)))
 
                             if self.config.ipynb_cells:
                                 # Individual cells
@@ -117,15 +180,18 @@ class Harvester(object):
                                 for source in cells:
                                     yield (
                                         "{0}:[{1}]".format(name, cellid),
-                                        self.gobble(
-                                            StringIO(strip_ipython(source))
+                                        self._gobble_text(
+                                            strip_ipython(source)
                                         ),
                                     )
                                     cellid += 1
-                    else:
+                    elif self.cache is None:
                         yield (name, self.gobble(fobj))
+                    else:
+                        yield (name, self._gobble_text(fobj.read()))
                 except Exception as e:
                     yield (name, {'error': str(e)})
+        self._save_cache()
 
     @property
     def results(self):
@@ -172,8 +238,37 @@ class Harvester(object):
         raise NotImplementedError
 
 
+def _order_name(order):
+    '''Return a stable name for a :func:`~radon.complexity.sorted_results`
+    ordering function. The built-in orderings are module-level lambdas, so
+    they are identified by identity.'''
+    name = getattr(order, '__name__', None)
+    if name and name != '<lambda>':
+        return name
+    for candidate in ('SCORE', 'LINES', 'ALPHA'):
+        if order is getattr(cc_mod, candidate, None):
+            return candidate
+    return str(order)
+
+
 class CCHarvester(Harvester):
     '''A class that analyzes Python modules' Cyclomatic Complexity.'''
+
+    def cache_params(self):
+        '''CC results depend on `no_assert`, `show_closures` and `order`.'''
+        return (
+            ('no_assert', self.config.no_assert),
+            ('show_closures', self.config.show_closures),
+            ('order', _order_name(self.config.order)),
+        )
+
+    def to_cache(self, result):
+        '''Convert CC blocks into JSON-serializable data.'''
+        return [cc_block_to_data(block) for block in result]
+
+    def from_cache(self, data):
+        '''Rebuild CC blocks from their cached data.'''
+        return [data_to_cc_block(block) for block in data]
 
     def gobble(self, fobj):
         '''Analyze the content of the file object.'''
@@ -335,6 +430,10 @@ class RawHarvester(Harvester):
 class MIHarvester(Harvester):
     '''A class that analyzes Python modules' Maintainability Index.'''
 
+    def cache_params(self):
+        '''MI results depend on `multi` (how comments are counted).'''
+        return (('multi', self.config.multi),)
+
     def gobble(self, fobj):
         '''Analyze the content of the file object.'''
         mi = mi_visit(fobj.read(), self.config.multi)
@@ -384,6 +483,14 @@ class HCHarvester(Harvester):
     def __init__(self, paths, config):
         super().__init__(paths, config)
         self.by_function = config.by_function
+
+    def to_cache(self, result):
+        """Convert a Halstead result into JSON-serializable data."""
+        return halstead_to_data(result)
+
+    def from_cache(self, data):
+        """Rebuild a Halstead result from its cached data."""
+        return data_to_halstead(data)
 
     def gobble(self, fobj):
         """Analyze the content of the file object."""

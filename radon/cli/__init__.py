@@ -113,6 +113,7 @@ def cc(
     output_file=_cfg.get_value('output_file', str, None),
     include_ipynb=_cfg.get_value('include_ipynb', bool, False),
     ipynb_cells=_cfg.get_value('ipynb_cells', bool, False),
+    cache_file=_cfg.get_value('cache_file', str, None),
 ):
     '''Analyze the given Python modules and compute Cyclomatic
     Complexity (CC).
@@ -148,6 +149,8 @@ def cc(
     :param -O, --output-file <str>: The output file (default to stdout).
     :param --include-ipynb: Include IPython Notebook files
     :param --ipynb-cells: Include reports for individual IPYNB cells
+    :param --cache-file <str>: Path to a JSON cache file. When given, results
+        for files whose content did not change are reused across runs.
     '''
     config = Config(
         min=min.upper(),
@@ -162,6 +165,7 @@ def cc(
         show_closures=show_closures,
         include_ipynb=include_ipynb,
         ipynb_cells=ipynb_cells,
+        cache_file=cache_file,
     )
     harvester = CCHarvester(paths, config)
     with outstream(output_file) as stream:
@@ -186,6 +190,7 @@ def raw(
     output_file=_cfg.get_value('output_file', str, None),
     include_ipynb=_cfg.get_value('include_ipynb', bool, False),
     ipynb_cells=_cfg.get_value('ipynb_cells', bool, False),
+    cache_file=_cfg.get_value('cache_file', str, None),
 ):
     '''Analyze the given Python modules and compute raw metrics.
 
@@ -203,6 +208,8 @@ def raw(
     :param -O, --output-file <str>: The output file (default to stdout).
     :param --include-ipynb: Include IPython Notebook files
     :param --ipynb-cells: Include reports for individual IPYNB cells
+    :param --cache-file <str>: Path to a JSON cache file. When given, results
+        for files whose content did not change are reused across runs.
     '''
     config = Config(
         exclude=exclude,
@@ -210,6 +217,7 @@ def raw(
         summary=summary,
         include_ipynb=include_ipynb,
         ipynb_cells=ipynb_cells,
+        cache_file=cache_file,
     )
     harvester = RawHarvester(paths, config)
     with outstream(output_file) as stream:
@@ -231,6 +239,7 @@ def mi(
     output_file=_cfg.get_value('output_file', str, None),
     include_ipynb=_cfg.get_value('include_ipynb', bool, False),
     ipynb_cells=_cfg.get_value('ipynb_cells', bool, False),
+    cache_file=_cfg.get_value('cache_file', str, None),
 ):
     '''Analyze the given Python modules and compute the Maintainability Index.
 
@@ -255,6 +264,8 @@ def mi(
     :param -O, --output-file <str>: The output file (default to stdout).
     :param --include-ipynb: Include IPython Notebook files
     :param --ipynb-cells: Include reports for individual IPYNB cells
+    :param --cache-file <str>: Path to a JSON cache file. When given, results
+        for files whose content did not change are reused across runs.
     '''
     config = Config(
         min=min.upper(),
@@ -266,6 +277,7 @@ def mi(
         sort=sort,
         include_ipynb=include_ipynb,
         ipynb_cells=ipynb_cells,
+        cache_file=cache_file,
     )
 
     harvester = MIHarvester(paths, config)
@@ -284,6 +296,7 @@ def hal(
     output_file=_cfg.get_value('output_file', str, None),
     include_ipynb=_cfg.get_value('include_ipynb', bool, False),
     ipynb_cells=_cfg.get_value('ipynb_cells', bool, False),
+    cache_file=_cfg.get_value('cache_file', str, None),
 ):
     """
     Analyze the given Python modules and compute their Halstead metrics.
@@ -305,6 +318,8 @@ def hal(
     :param -O, --output-file <str>: The output file (default to stdout).
     :param --include-ipynb: Include IPython Notebook files
     :param --ipynb-cells: Include reports for individual IPYNB cells
+    :param --cache-file <str>: Path to a JSON cache file. When given, results
+        for files whose content did not change are reused across runs.
     """
     config = Config(
         exclude=exclude,
@@ -312,6 +327,7 @@ def hal(
         by_function=functions,
         include_ipynb=include_ipynb,
         ipynb_cells=ipynb_cells,
+        cache_file=cache_file,
     )
 
     harvester = HCHarvester(paths, config)

@@ -1,3 +1,12 @@
+Unreleased
+----------
+
+- Add incremental result caching to all harvesters: pass `--cache-file` (or
+  set `cache_file` in a configuration file) to reuse results for files whose
+  content did not change. Results are keyed by content digest and by the
+  analysis settings that affect them, so renames are reused while exclusions,
+  deleted files and changed settings are always re-evaluated.
+
 6.0.1 (Mar 26, 2023)
 --------------------
 

@@ -190,6 +190,17 @@ Options
 
    Value can be set in a configuration file using the ``ipynb_cells`` property.
 
+.. option:: --cache-file <path>
+
+   Cache analysis results in the specified JSON file and reuse them across
+   runs for files whose content did not change. Results are keyed by file
+   content, so renamed files are still reused, while exclusions are always
+   re-evaluated against the current paths. Each metric is cached under its
+   own key together with the settings that affect it, so different commands
+   and configurations never share stale values.
+
+   Value can be set in a configuration file using the ``cache_file`` property.
+
 .. option:: -O, --output-file
 
    Save output to the specified output file.
@@ -318,6 +329,17 @@ Options
 
    Value can be set in a configuration file using the ``ipynb_cells`` property.
 
+.. option:: --cache-file <path>
+
+   Cache analysis results in the specified JSON file and reuse them across
+   runs for files whose content did not change. Results are keyed by file
+   content, so renamed files are still reused, while exclusions are always
+   re-evaluated against the current paths. Each metric is cached under its
+   own key together with the settings that affect it, so different commands
+   and configurations never share stale values.
+
+   Value can be set in a configuration file using the ``cache_file`` property.
+
 .. option:: -O, --output-file
 
    Save output to the specified output file.
@@ -419,6 +441,17 @@ Options
 
    Value can be set in a configuration file using the ``ipynb_cells`` property.
 
+.. option:: --cache-file <path>
+
+   Cache analysis results in the specified JSON file and reuse them across
+   runs for files whose content did not change. Results are keyed by file
+   content, so renamed files are still reused, while exclusions are always
+   re-evaluated against the current paths. Each metric is cached under its
+   own key together with the settings that affect it, so different commands
+   and configurations never share stale values.
+
+   Value can be set in a configuration file using the ``cache_file`` property.
+
 Examples
 ++++++++
 
@@ -495,6 +528,17 @@ Options
    Report on individual cells in any .ipynb files.
 
    Value can be set in a configuration file using the ``ipynb_cells`` property.
+
+.. option:: --cache-file <path>
+
+   Cache analysis results in the specified JSON file and reuse them across
+   runs for files whose content did not change. Results are keyed by file
+   content, so renamed files are still reused, while exclusions are always
+   re-evaluated against the current paths. Each metric is cached under its
+   own key together with the settings that affect it, so different commands
+   and configurations never share stale values.
+
+   Value can be set in a configuration file using the ``cache_file`` property.
 
 Examples
 ++++++++
