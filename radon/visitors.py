@@ -59,6 +59,15 @@ class Function(BaseFunc):
         return 'M' if self.is_method else 'F'
 
     @property
+    def metric_level(self):
+        '''Whether ``complexity`` measures a method or a function.
+
+        Both are self measurements, but keeping them apart lets consumers store
+        a single ``metric_level`` column for every block kind.
+        '''
+        return 'method_own' if self.is_method else 'function_own'
+
+    @property
     def fullname(self):
         '''The full name of the function. If it is a method, then the full name
         is:
@@ -85,6 +94,14 @@ class Class(BaseClass):
     '''Object representing a class block.'''
 
     letter = 'C'
+
+    @property
+    def metric_level(self):
+        '''``complexity`` is an aggregate over the class's methods.
+
+        It must not be summed together with the methods' own complexity.
+        '''
+        return 'class_aggregate'
 
     @property
     def fullname(self):
@@ -138,6 +155,7 @@ class CodeVisitor(ast.NodeVisitor):
         directly passed to the `ast.NodeVisitor` constructor.
         '''
         visitor = cls(**kwargs)
+        visitor.ast_node = ast_node
         visitor.visit(ast_node)
         return visitor
 
@@ -164,6 +182,9 @@ class ComplexityVisitor(CodeVisitor):
         self.classname = classname
         self.no_assert = no_assert
         self._max_line = float('-inf')
+        # Set by ``from_ast``; lets ``symbols()`` keep nested definitions even
+        # when the flat block model cannot represent them.
+        self.ast_node = None
 
     @property
     def functions_complexity(self):
@@ -216,6 +237,23 @@ class ComplexityVisitor(CodeVisitor):
         '''The maximum line number among the analyzed lines.'''
         if value > self._max_line:
             self._max_line = value
+
+    def symbols(self, module_name='<module>'):
+        '''Return the source-ordered symbol records for this analysis.
+
+        The records keep the definition hierarchy, qualified names, definition
+        order, line ranges and metric level.  When the visitor was created from
+        an AST, nested definitions are extracted from that AST; otherwise the
+        method falls back to the visitor's block tree.  See
+        :mod:`radon.symbols`.
+        '''
+        from radon.symbols import symbols_from_tree, symbols_from_visitor
+
+        if self.ast_node is not None:
+            return symbols_from_tree(self.ast_node, self, module_name)
+        return symbols_from_visitor(self, module_name)
+
+    symbol_table = symbols
 
     def generic_visit(self, node):
         '''Main entry point for the visitor.'''

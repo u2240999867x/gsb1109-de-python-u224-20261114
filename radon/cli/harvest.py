@@ -25,6 +25,7 @@ from radon.complexity import (
 )
 from radon.metrics import h_visit, mi_rank, mi_visit
 from radon.raw import analyze
+from radon.symbols import symbols_from_code
 
 if sys.version_info[0] < 3:
     from StringIO import StringIO
@@ -250,6 +251,53 @@ class CCHarvester(Harvester):
                 (RANKS_COLORS[ranked_cc], ranked_cc, cc, RESET),
                 {},
             )
+
+
+class SymbolHarvester(Harvester):
+    '''A harvester that reports source-ordered symbol records.
+
+    Unlike :class:`CCHarvester`, every definition is kept as its own record:
+    qualified names, scopes, definition order, line ranges and the metric level
+    are preserved, and repeated definitions are not collapsed by name.
+    '''
+
+    def gobble(self, fobj):
+        '''Analyze the content of the file object.'''
+        return symbols_from_code(
+            fobj.read(), no_assert=self.config.no_assert
+        )
+
+    def as_json(self):
+        '''Format the results as JSON.'''
+        return json.dumps(
+            {
+                name: table.as_dict()
+                for name, table in self.results
+                if not isinstance(table, dict) or 'error' not in table
+            }
+        )
+
+    def to_terminal(self):
+        '''Yield the records as terminal lines.'''
+        for name, table in self.results:
+            if isinstance(table, dict) and 'error' in table:
+                yield name, (table['error'],), {'error': True}
+                continue
+            yield name, (), {}
+            for record in table:
+                yield _format_symbol_record(record), (), {'indent': 1}
+
+
+def _format_symbol_record(record):
+    return '{0} {1}:{2}->{3} {4} [{5}] - {6}'.format(
+        record.letter,
+        record.lineno,
+        record.col_offset,
+        record.endline,
+        record.qualname,
+        record.metric_level,
+        record.complexity,
+    )
 
 
 class RawHarvester(Harvester):

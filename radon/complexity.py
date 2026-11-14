@@ -86,7 +86,9 @@ def add_inner_blocks(blocks):
         new_blocks.append(block)
         for inner_block in ('closures', 'inner_classes'):
             for i_block in getattr(block, inner_block, ()):
-                named = i_block._replace(name=block.name + '.' + i_block.name)
+                named = i_block._replace(
+                    name=block.fullname + '.' + i_block.name
+                )
                 all_blocks.append(named)
                 for meth in getattr(named, 'methods', ()):
                     m_named = meth._replace(classname=named.name)
@@ -106,3 +108,26 @@ def cc_visit_ast(ast_node, **kwargs):
     the keyword arguments are directly passed to the visitor.
     '''
     return ComplexityVisitor.from_ast(ast_node, **kwargs).blocks
+
+
+def cc_symbols(code, module_name='<module>', **kwargs):
+    '''Return the source-ordered symbol records for the given code.
+
+    Unlike :func:`cc_visit`, the result preserves the definition hierarchy:
+    closures and inner classes are included, qualified names are unique across
+    scopes, and repeated definitions of the same name are kept as separate
+    records.  The records also carry their metric level, so class aggregates
+    can be distinguished from a method's or function's own complexity.
+
+    See :mod:`radon.symbols` for the record and table API.
+    '''
+    from radon.symbols import symbols_from_code
+
+    return list(symbols_from_code(code, module_name, **kwargs).records)
+
+
+def cc_symbols_ast(ast_node, module_name='<module>', **kwargs):
+    '''Like :func:`cc_symbols`, but taking an AST node as input.'''
+    from radon.symbols import symbols_from_ast
+
+    return list(symbols_from_ast(ast_node, module_name, **kwargs).records)

@@ -190,6 +190,18 @@ Options
 
    Value can be set in a configuration file using the ``ipynb_cells`` property.
 
+.. option:: --symbols
+
+   Emit one record per definition instead of the traditional block list.  The
+   output is JSON and keeps the qualified name, scope, definition order, line
+   range and metric level for every class, method, function and closure.
+   Repeated definitions with the same name are kept as separate records.
+
+   The metric level is ``class_aggregate`` for a class, ``method_own`` for a
+   method and ``function_own`` for a function or closure.  This distinguishes
+   the class's aggregate complexity from a method's own complexity, so the two
+   are not summed together.
+
 .. option:: -O, --output-file
 
    Save output to the specified output file.
@@ -233,6 +245,15 @@ Setting the path to "-" will cause Radon to analyze code from stdin
 
 Here Radon will only display blocks ranked between B and E (i.e. from ``CC=6``
 to ``CC=40``).
+
+::
+
+    $ radon cc --symbols path
+
+This emits one JSON record per definition.  Unlike the default output, the
+records keep the full hierarchy (``A.run.run``), the scope, the source order,
+the exact line range and the metric level, so callers can store them without
+collapsing same-named definitions or double-counting nested complexity.
 
 
 The :command:`mi` command

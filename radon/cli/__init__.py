@@ -25,6 +25,7 @@ from radon.cli.harvest import (
     HCHarvester,
     MIHarvester,
     RawHarvester,
+    SymbolHarvester,
 )
 
 if sys.version_info[0] == 2:
@@ -113,6 +114,7 @@ def cc(
     output_file=_cfg.get_value('output_file', str, None),
     include_ipynb=_cfg.get_value('include_ipynb', bool, False),
     ipynb_cells=_cfg.get_value('ipynb_cells', bool, False),
+    symbols=False,
 ):
     '''Analyze the given Python modules and compute Cyclomatic
     Complexity (CC).
@@ -148,6 +150,10 @@ def cc(
     :param -O, --output-file <str>: The output file (default to stdout).
     :param --include-ipynb: Include IPython Notebook files
     :param --ipynb-cells: Include reports for individual IPYNB cells
+    :param --symbols: Emit one record per definition instead of the traditional
+        block list.  Records keep the qualified name, scope, definition order,
+        line range and metric level, and repeated definitions are not collapsed.
+        Implies JSON output.
     '''
     config = Config(
         min=min.upper(),
@@ -163,6 +169,11 @@ def cc(
         include_ipynb=include_ipynb,
         ipynb_cells=ipynb_cells,
     )
+    if symbols:
+        harvester = SymbolHarvester(paths, config)
+        with outstream(output_file) as stream:
+            log_result(harvester, json=True, stream=stream)
+        return
     harvester = CCHarvester(paths, config)
     with outstream(output_file) as stream:
         log_result(

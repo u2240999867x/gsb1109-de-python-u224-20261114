@@ -103,6 +103,83 @@ Cyclomatic Complexity
 
 .. autofunction:: sorted_results(blocks, order=SCORE)
 
+.. autofunction:: cc_symbols
+
+.. autofunction:: cc_symbols_ast
+
+Symbol records
+--------------
+
+.. py:module:: radon.symbols
+    :synopsis: Source-ordered symbol records preserving definition hierarchy.
+
+When the flat block list is not enough - because the consumer stores one row
+per definition, keys rows by name, or needs both a class aggregate and the
+methods' own complexity - use the symbol API.  It returns one
+:class:`~radon.symbols.SymbolRecord` per definition, in source order, with:
+
+* ``symbol_id``: unique within the module (qualified name plus same-name
+  occurrence, e.g. ``A.run#1`` and ``same#2``);
+* ``qualname`` and ``scope``: the full hierarchy, e.g. ``A.run.run`` inside
+  scope ``A.run``;
+* ``order``/``scope_order``/``occurrence``: definition order in the module, in
+  the scope, and among same-named siblings;
+* ``lineno``/``endline``: the exact line range;
+* ``metric_level``: ``class_aggregate``, ``method_own`` or ``function_own``,
+  so aggregate class complexity is never summed with the methods' own values.
+
+Records for repeated definitions are never collapsed:
+
+.. code-block:: python
+
+    >>> from radon.symbols import symbol_table
+    >>> table = symbol_table('''
+    ... class A:
+    ...     def run(self):
+    ...         def run():
+    ...             if flag: pass
+    ...     def run(self):
+    ...         pass
+    ...
+    ... class B:
+    ...     def run(self):
+    ...         pass
+    ... ''')
+    >>> [(r.symbol_id, r.kind, r.metric_level) for r in table]
+    [('A#1', 'class', 'class_aggregate'),
+     ('A.run#1', 'method', 'method_own'),
+     ('A.run.run#1', 'function', 'function_own'),
+     ('A.run#2', 'method', 'method_own'),
+     ('B#1', 'class', 'class_aggregate'),
+     ('B.run#1', 'method', 'method_own')]
+
+Module totals are available on the returned
+:class:`~radon.symbols.SymbolTable`:
+
+* ``legacy_total_complexity`` matches Radon's traditional
+  ``ComplexityVisitor.total_complexity``;
+* ``total_complexity`` additionally counts closures, inner classes and other
+  nested definitions exactly once;
+* ``nested_complexity`` is the difference between the two.
+
+.. autoclass:: SymbolRecord
+
+.. autoclass:: SymbolTable
+
+.. autofunction:: symbols_from_code
+
+.. autofunction:: symbols_from_ast
+
+.. autofunction:: symbols_from_tree
+
+.. autofunction:: symbols_from_visitor
+
+.. autofunction:: symbols_from_blocks
+
+.. autofunction:: symbol_table
+
+.. autofunction:: symbol_records
+
 Raw metrics
 -----------
 

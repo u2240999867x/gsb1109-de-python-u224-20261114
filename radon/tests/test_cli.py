@@ -119,6 +119,19 @@ def test_cc(mocker, log_mock):
     )
 
 
+def test_cc_symbols_uses_symbol_harvester(mocker, log_mock):
+    harv_mock = mocker.patch('radon.cli.SymbolHarvester')
+    harv_mock.return_value = mocker.sentinel.harvester
+
+    cli.cc(['-'], symbols=True)
+
+    config = harv_mock.call_args[0][1]
+    assert config.no_assert is False
+    log_mock.assert_called_once_with(
+        mocker.sentinel.harvester, json=True, stream=sys.stdout
+    )
+
+
 def test_raw(mocker, log_mock):
     harv_mock = mocker.patch('radon.cli.RawHarvester')
     harv_mock.return_value = mocker.sentinel.harvester

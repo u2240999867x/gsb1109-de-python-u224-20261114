@@ -1,3 +1,12 @@
+Unreleased
+----------
+
+- Add ``radon.symbols``: source-ordered symbol records preserving the
+  definition hierarchy, qualified names, definition order, line ranges and
+  metric level.  Repeated definitions are kept and module totals count nested
+  complexity once.
+- Add ``--symbols`` to ``radon cc`` to emit those records as JSON.
+
 6.0.1 (Mar 26, 2023)
 --------------------
 
