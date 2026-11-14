@@ -205,6 +205,50 @@ For direct JSON serialization, combine this option with ``details=False`` to avo
         exifread.process_file(file_handle, details=False, builtin_types=True)
     )
 
+Lens Catalogue Matching
+=======================
+
+``exifread.lens`` compares the lens evidence in a photograph against a
+catalogue of lenses. The catalogue stores only the endpoints of each range:
+the shortest and longest focal length, and the widest available f-number
+(maximum aperture) at each end.
+
+.. code-block:: python
+
+    from fractions import Fraction
+
+    from exifread.lens import CatalogueLens, LensMatcher
+    import exifread
+
+    catalogue = [
+        CatalogueLens(24, 70, Fraction(28, 10), Fraction(4), "24-70 f/2.8-4"),
+        CatalogueLens(50, 50, Fraction(18, 10), Fraction(18, 10), "50 f/1.8"),
+    ]
+
+    with open(file_path, "rb") as file_handle:
+        tags = exifread.process_file(file_handle)
+
+    matcher = LensMatcher.from_tags(tags)
+    for match in matcher.match_catalogue(catalogue):
+        print(match.name, match.result, match.used_ends)
+
+Each lens is classified as ``MatchResult.EXCLUDED``, ``MatchResult.COMPATIBLE``
+or ``MatchResult.INSUFFICIENT``. A ``LensMatch`` also lists every
+``Constraint`` that was evaluated, including whether the wide or tele end
+supplied it, so the decision is fully traceable.
+
+The matching is deliberately conservative:
+
+- Only the zoom endpoints are documented. A shot taken strictly between the
+  endpoints is never excluded, because no mid-range aperture curve exists and
+  none is interpolated.
+- Catalogue values are *maximum* apertures. A photograph stopped down to a
+  larger f-number is always compatible and never read as the lens being unable
+  to open wide enough.
+- A single field with a missing denominator (the EXIF ``0/0`` placeholder, or
+  serialized ``0``) only invalidates that field; all other usable evidence is
+  kept. A lens name is not required for matching.
+
 Usage Example
 =============
 
