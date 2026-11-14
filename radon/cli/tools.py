@@ -20,6 +20,16 @@ from radon.cli.colors import (BRIGHT, LETTERS_COLORS, RANKS_COLORS, RESET,
 from radon.complexity import cc_rank
 from radon.visitors import Function
 
+#: Fields added to complexity blocks that come from a notebook cell. They are
+#: emitted by :func:`cc_to_dict` alongside the regular block fields.
+NOTEBOOK_BLOCK_FIELDS = (
+    'cell',
+    'cell_id',
+    'cell_lineno',
+    'cell_endline',
+    'execution_count',
+)
+
 try:
     import nbformat
 
@@ -309,6 +319,10 @@ def cc_to_dict(obj):
         v = getattr(obj, a, None)
         if v is not None:
             result[a] = v
+    for a in NOTEBOOK_BLOCK_FIELDS:
+        v = getattr(obj, a, None)
+        if v is not None:
+            result[a] = v
     for key in ('methods', 'closures'):
         if hasattr(obj, key):
             result[key] = list(map(cc_to_dict, getattr(obj, key)))
@@ -595,3 +609,22 @@ def strip_ipython(code):
     return '\n'.join(
         [line for line in code.split('\n') if not line.startswith('%')]
     )
+
+
+def strip_ipython_with_map(code):
+    '''Strip IPython magic lines and keep track of their positions.
+
+    Returns a ``(stripped_code, line_map)`` tuple. ``line_map[i]`` is the
+    1-based line number in *code* of the ``i``-th line of
+    ``stripped_code``. It allows callers to translate line numbers computed
+    on the stripped source (for example by the AST) back to the original
+    document.
+    '''
+    kept = []
+    line_map = []
+    for lineno, line in enumerate(code.split('\n'), 1):
+        if line.startswith('%'):
+            continue
+        kept.append(line)
+        line_map.append(lineno)
+    return '\n'.join(kept), line_map

@@ -50,6 +50,15 @@ To enable scanning of Jupyter notebooks, add the ``--include-ipynb`` flag with a
 
 To enable reporting of individual cells, add the ``--ipynb-cells`` flag with any of the commands.
 
+For the :command:`cc` command, blocks found in a notebook are reported with
+the line numbers of the original notebook and the identity of the cell that
+defines them (``cell``, ``cell_lineno``, ``cell_endline`` and
+``execution_count``). Cells are read in document order; execution counts are
+kept as provenance only. When a notebook provides cell ``id``\\ s (nbformat
+4.5+), they are used as the cell identity, so reordering cells keeps every
+block attached to its own cell. Cells without an ``id`` use their position
+among code cells instead, which keeps two identical cells distinct.
+
 The :command:`cc` command
 -------------------------
 

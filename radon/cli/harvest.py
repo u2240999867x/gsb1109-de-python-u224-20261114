@@ -15,7 +15,7 @@ from radon.cli.tools import (
     dict_to_md,
     iter_filenames,
     raw_to_dict,
-    strip_ipython,
+    strip_ipython_with_map,
 )
 from radon.complexity import (
     add_inner_blocks,
@@ -37,6 +37,177 @@ try:
     SUPPORTS_IPYNB = True
 except ImportError:
     SUPPORTS_IPYNB = False
+
+
+_NotebookCell = collections.namedtuple(
+    '_NotebookCell',
+    [
+        'index',
+        'ordinal',
+        'cell_id',
+        'execution_count',
+        'source',
+        'start_line',
+        'line_count',
+    ],
+)
+
+
+class _NotebookSource(object):
+    '''Line mapping for a piece of code extracted from a notebook.
+
+    ``code`` is the source that is actually analyzed: ``%`` lines have been
+    removed. ``line_map`` maps every line of ``code`` back to its line number
+    in the original notebook (or cell, when only one cell is analyzed).
+    Mapping back is what makes it possible to return the original cell and its
+    line range instead of the line numbers of the joined/stripped source.
+    '''
+
+    def __init__(self, code, cells, line_map):
+        self.code = code
+        self.cells = cells
+        self.line_map = line_map
+
+    def original_line(self, lineno):
+        '''Return the original line number for an analyzed line.'''
+        try:
+            index = int(lineno) - 1
+        except (TypeError, ValueError):
+            return None
+        if 0 <= index < len(self.line_map):
+            return self.line_map[index]
+        return None
+
+    def cell_for(self, lineno):
+        '''Return the cell holding the given original line number.'''
+        if lineno is None:
+            return None
+        for cell in self.cells:
+            if cell.start_line <= lineno < (
+                cell.start_line + cell.line_count
+            ):
+                return cell
+        return None
+
+
+def _source_text(source):
+    '''Normalize the ``source`` field of a notebook cell.'''
+    if isinstance(source, (list, tuple)):
+        return ''.join(source)
+    return source or ''
+
+
+def _cell_field(cell, name, default=None):
+    '''Read a field from a notebook cell.
+
+    ``nbformat`` returns ``NotebookNode`` objects, but the CLI also accepts
+    plain dictionaries in tests and in third-party code.
+    '''
+    try:
+        return cell[name]
+    except (KeyError, TypeError, IndexError):
+        return getattr(cell, name, default)
+
+
+def _notebook_cells(nb):
+    '''Return the code cells of *nb*, in document order.
+
+    Execution counts are deliberately not used for ordering: notebooks often
+    contain cells that were run out of order. They are only kept as provenance
+    metadata.
+    '''
+    cells = []
+    chunks = []
+    start_line = 1
+    ordinal = 0
+    for index, cell in enumerate(_cell_field(nb, 'cells', ()) or ()):
+        if _cell_field(cell, 'cell_type') != 'code':
+            continue
+        source = _source_text(_cell_field(cell, 'source'))
+        line_count = len(source.split('\n'))
+        cells.append(
+            _NotebookCell(
+                index=index,
+                ordinal=ordinal,
+                cell_id=_cell_field(cell, 'id'),
+                execution_count=_cell_field(cell, 'execution_count'),
+                source=source,
+                start_line=start_line,
+                line_count=line_count,
+            )
+        )
+        chunks.append(source)
+        start_line += line_count
+        ordinal += 1
+    return cells, '\n'.join(chunks)
+
+
+def _notebook_source(code, cells):
+    '''Build a :class:`_NotebookSource` for *code*.
+
+    *cells* must be expressed in the same coordinate system as *code*: line
+    numbers in the resulting ``line_map`` are 1-based positions inside
+    *code*, and every cell's ``start_line`` is relative to the same origin.
+    '''
+    stripped, line_map = strip_ipython_with_map(code)
+    return _NotebookSource(stripped, cells, line_map)
+
+
+def _single_cell_source(cell):
+    '''Build a :class:`_NotebookSource` for one cell.
+
+    The cell is rebased so that its first line is line 1, which matches the
+    coordinates of the per-cell source.
+    '''
+    rebased = cell._replace(start_line=1)
+    return _notebook_source(cell.source, [rebased])
+
+
+def _cell_identity(cell):
+    '''Return the stable identity of a cell.
+
+    Cells saved with nbformat 4.5+ carry an ``id`` that survives reordering.
+    Older notebooks do not, so the ordinal position among code cells is used.
+    Two cells with the same source still get different identities, since the
+    ordinal is positional.
+    '''
+    if cell.cell_id is not None:
+        return cell.cell_id
+    return cell.ordinal
+
+
+def _annotate_block(block, notebook_source):
+    '''Attach notebook cell information to a complexity block.'''
+    start = notebook_source.original_line(block.lineno)
+    end = notebook_source.original_line(block.endline)
+    if start is None:
+        return block
+    if end is None or end < start:
+        end = start
+
+    replacements = {'lineno': start, 'endline': end}
+    for attr in ('methods', 'closures', 'inner_classes'):
+        inner = getattr(block, attr, None)
+        if inner is not None:
+            replacements[attr] = [
+                _annotate_block(child, notebook_source) for child in inner
+            ]
+    annotated = block._replace(**replacements)
+
+    cell = notebook_source.cell_for(start)
+    if cell is not None:
+        annotated.cell = _cell_identity(cell)
+        annotated.cell_lineno = start - cell.start_line + 1
+        # Blocks are defined by a single cell in practice. Do not let
+        # ``cell_endline`` point outside of the cell though: if a block
+        # somehow spans cells, report the part that belongs to its first cell.
+        annotated.cell_endline = min(
+            end - cell.start_line + 1, cell.line_count
+        )
+        annotated.execution_count = cell.execution_count
+        if cell.cell_id is not None:
+            annotated.cell_id = cell.cell_id
+    return annotated
 
 
 class Harvester(object):
@@ -86,6 +257,15 @@ class Harvester(object):
         '''
         raise NotImplementedError
 
+    def _gobble_notebook(self, notebook_source):
+        '''Analyze notebook code and let subclasses post-process the result.'''
+        result = self.gobble(StringIO(notebook_source.code))
+        return self._notebook_result(result, notebook_source)
+
+    def _notebook_result(self, result, notebook_source):
+        '''Hook for subclasses to attach notebook cell information.'''
+        return result
+
     def run(self):
         '''Start the analysis. For every file, this method calls the
         :meth:`gobble` method. Results are yielded as tuple:
@@ -99,29 +279,28 @@ class Harvester(object):
                             nb = nbformat.read(
                                 fobj, as_version=nbformat.NO_CONVERT
                             )
-                            cells = [
-                                cell.source
-                                for cell in nb.cells
-                                if cell.cell_type == 'code'
-                            ]
+                            cells, doc = _notebook_cells(nb)
                             # Whole document
-                            doc = "\n".join(cells)
                             yield (
                                 name,
-                                self.gobble(StringIO(strip_ipython(doc))),
+                                self._gobble_notebook(
+                                    _notebook_source(doc, cells)
+                                ),
                             )
 
                             if self.config.ipynb_cells:
                                 # Individual cells
-                                cellid = 0
-                                for source in cells:
-                                    yield (
-                                        "{0}:[{1}]".format(name, cellid),
-                                        self.gobble(
-                                            StringIO(strip_ipython(source))
-                                        ),
+                                for cell in cells:
+                                    cell_name = "{0}:[{1}]".format(
+                                        name, _cell_identity(cell)
                                     )
-                                    cellid += 1
+                                    try:
+                                        result = self._gobble_notebook(
+                                            _single_cell_source(cell)
+                                        )
+                                    except Exception as e:
+                                        result = {'error': str(e)}
+                                    yield (cell_name, result)
                     else:
                         yield (name, self.gobble(fobj))
                 except Exception as e:
@@ -181,6 +360,12 @@ class CCHarvester(Harvester):
         if self.config.show_closures:
             r = add_inner_blocks(r)
         return sorted_results(r, order=self.config.order)
+
+    def _notebook_result(self, blocks, notebook_source):
+        '''Map every block back to the notebook cell that defines it.'''
+        if isinstance(blocks, dict) and 'error' in blocks:
+            return blocks
+        return [_annotate_block(block, notebook_source) for block in blocks]
 
     def _to_dicts(self):
         '''Format the results as a dictionary of dictionaries.'''
