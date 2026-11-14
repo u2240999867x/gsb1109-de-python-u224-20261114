@@ -26,6 +26,9 @@ dependencies = [
 [project.urls]
 homepage = "https://github.com/pycompression/xopen/"
 
+[project.scripts]
+xopen-archive-plan = "xopen.archive_plan:cli"
+
 [project.optional-dependencies]
 dev = ["pytest"]
 lz4 = ['lz4>=4.4.5; platform_python_implementation != "PyPy"']

@@ -184,6 +184,54 @@ the ``compression.zstd`` module in the standard library is used.
   the ``backports.zstd`` or ``compression.zstd`` package is used.
 
 
+Archive write planning
+----------------------
+
+``xopen.archive_plan`` selects, for every group of archived files, a measured
+write scheme (or a pair of schemes) so that every receiver can read the data
+while the total write time stays within a limit and the total artifact size is
+minimal. A group may keep at most two encoded copies; each retained copy adds
+its full size and its full write-time upper bound.
+
+The input is a JSON manifest (flat JSON rows and CSV/TSV with the same column
+names also work). ``size`` accepts ``B``/``KB``/``KiB``/``MB``/``MiB`` suffixes and
+times accept ``ms``/``s``/``min``/``h``; quantities without a suffix use the
+manifest's own unit. Times use exact rational arithmetic, so fractional
+measurements do not accumulate float error::
+
+    {
+      "time_limit": 100,
+      "time_unit": "s",
+      "receivers": {
+        "laptop": ["zst", "gz"],
+        "server": ["xz"]
+      },
+      "groups": [
+        {
+          "id": "logs",
+          "schemes": [
+            {"id": "logs-zstd", "format": "zst", "size": 1000,
+             "time": 20, "artifact": "logs.txt.zst"},
+            {"id": "logs-xz", "format": "xz", "size": 900, "time": 80}
+          ]
+        }
+      ]
+    }
+
+If a receiver omits ``formats``, it can read everything. A scheme may list
+explicit ``readers`` instead of relying on formats, and its format is inferred
+from the artifact extension when omitted.
+
+Run the planner with ``python -m xopen.archive_plan manifest.json`` or the
+``xopen-archive-plan`` console script. A ready-to-run manifest is in
+``examples/archive-plan.json``. It reports the selected schemes, the remaining
+budget and a read path for each receiver. With ``--json`` the same report is
+machine readable, and ``--markdown`` produces a table. If the fastest
+full-coverage plan exceeds the limit, the report includes the exact minimum
+extra time needed; ``--strict`` exits with status 3 in that case (``--check``
+prints a one-line summary and uses the same status).
+
+
 Changelog
 ---------
 

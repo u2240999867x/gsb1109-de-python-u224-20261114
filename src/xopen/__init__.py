@@ -5,6 +5,7 @@ Open compressed files transparently.
 __all__ = [
     "_PipedCompressionProgram",
     "__version__",
+    "plan_archive",
     "xopen",
 ]
 
@@ -888,3 +889,11 @@ def xopen(
     if "t" in mode:
         return io.TextIOWrapper(opened_file, encoding, errors, newline)
     return opened_file
+
+
+def __getattr__(name: str):
+    if name == "plan_archive":
+        from .archive_plan import plan_archive
+
+        return plan_archive
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

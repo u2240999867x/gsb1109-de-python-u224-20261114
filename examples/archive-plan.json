@@ -1,0 +1,28 @@
+{
+  "time_limit": 100,
+  "time_unit": "s",
+  "receivers": {
+    "laptop": ["zst", "gz"],
+    "server": ["zst", "xz"],
+    "legacy": ["bz2", "gz"]
+  },
+  "groups": [
+    {
+      "id": "docs",
+      "schemes": [
+        {"id": "docs-zstd", "format": "zst", "size": 4200, "time": 12},
+        {"id": "docs-gz", "format": "gz", "size": 5100, "time": 9},
+        {"id": "docs-xz", "format": "xz", "size": 3900, "time": 40},
+        {"id": "docs-bz2", "format": "bz2", "size": 4800, "time": 22}
+      ]
+    },
+    {
+      "id": "db",
+      "schemes": [
+        {"id": "db-zstd", "format": "zst", "size": 12000, "time": 30},
+        {"id": "db-gz", "format": "gz", "size": 15000, "time": 25},
+        {"id": "db-xz", "format": "xz", "size": 11000, "time": 55}
+      ]
+    }
+  ]
+}
