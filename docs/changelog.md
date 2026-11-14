@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Add `installer.plan`, an offline installation planner that maps wheel members to target scheme paths and reports target collisions, distinguishing identical contents from content conflicts, with platform-provided case-folding rules
+
 ## v1.1.0 (Oct 12, 2026)
 - Add early return when there are no optimization levels to compile bytecode for (#341)
 - Avoid building a `pathlib.Path` object for each record entry (#342)
