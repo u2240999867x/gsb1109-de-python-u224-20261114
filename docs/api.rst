@@ -129,6 +129,20 @@ Other metrics
 
 .. autofunction:: mi_compute
 
+.. automodule:: radon.mi_diff
+    :synopsis: Explaining the difference between two Maintainability Index scores.
+
+.. autoclass:: MISnapshot
+    :members:
+
+.. autofunction:: explain_mi_change
+
+.. autofunction:: explain_mi_change_from_codes
+
+.. autofunction:: compute_mi_state
+
+.. autofunction:: format_health_report
+
 
 Visitors
 --------

@@ -1,3 +1,13 @@
+unreleased
+----------
+
+- Add `radon.mi_diff` to explain the difference between two Maintainability
+  Index scores: store each revision's raw inputs and measurement convention,
+  re-compute per-factor contributions in a configurable replacement order so
+  they close the total change, retain pre-truncation contributions on the
+  zero-line and 0/100 clamp branches, and mark factors with missing old
+  operands or comment-counting conventions as unattributable
+
 6.0.1 (Mar 26, 2023)
 --------------------
 
