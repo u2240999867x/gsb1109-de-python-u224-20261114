@@ -34,6 +34,13 @@ Full API
     :members:
 
 
+:mod:`bibtexparser.dates` --- Precision-preserving date ranges and season calendars
+-------------------------------------------------------------------------------------
+
+.. automodule:: bibtexparser.dates
+    :members:
+
+
 :mod:`bibtexparser.BibtexFormat` --- Formatting options for writer
 ------------------------------------------------------------------
 

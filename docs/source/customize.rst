@@ -91,6 +91,45 @@ Value References and Representation
 * :mod:`bibtexparser.middlewares.MonthAbbreviationMiddleware`
 * :mod:`bibtexparser.middlewares.MonthLongStringMiddleware`
 
+.. _middleware_dates:
+
+Dates and Seasons
+:::::::::::::::::
+
+Free-text dates carry different precisions: ``"1998"`` is a whole year,
+``"1998-03"`` a month, ``"Spring 1998"`` a season and ``"1997/98"`` an
+academic year spanning a year boundary. They must not all be collapsed onto
+January 1st.
+
+* :class:`bibtexparser.middlewares.DateRangeMiddleware` resolves the free-text
+  ``date`` field and the entry's own ``year``/``month`` fields into bounded
+  date ranges, reconciles them, and keeps the original precision.
+* :class:`bibtexparser.dates.SeasonCalendar` maps season names to concrete
+  bounding rules. Seasons are only converted to bounded ranges through a
+  calendar supplied by the query; without one (or when the calendar lacks the
+  season) a season remains an explicitly unbounded range.
+* :func:`bibtexparser.middlewares.collect_date_conflicts` returns the entries
+  whose independent date sources are completely disjoint.
+
+Partially overlapping sources are intersected, exporting the shared overlap
+together with the provenance of every source; cross-year ranges keep their
+end date in the following year instead of being clipped to December 31st.
+
+.. code-block:: python
+
+    import bibtexparser
+    from bibtexparser.dates import SeasonCalendar
+    from bibtexparser.middlewares import DateRangeMiddleware
+
+    library = bibtexparser.parse_string(
+        '@article{a, date = {Spring 1998}, year = {1998}, month = {4}}'
+    )
+    library = DateRangeMiddleware(
+        season_calendar=SeasonCalendar.meteorological()
+    ).transform(library)
+    # The season (March-May) and the April registration overlap on April:
+    # library.entries_dict["a"]["date"] == "1998-04-01/1998-04-30"
+
 .. _middleware_names:
 
 Names

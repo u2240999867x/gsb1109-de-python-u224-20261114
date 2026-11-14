@@ -1,3 +1,5 @@
+from bibtexparser.middlewares.dates import DateRangeMiddleware
+from bibtexparser.middlewares.dates import collect_date_conflicts
 from bibtexparser.middlewares.enclosing import AddEnclosingMiddleware
 from bibtexparser.middlewares.enclosing import RemoveEnclosingMiddleware
 from bibtexparser.middlewares.fieldkeys import NormalizeFieldKeys
@@ -28,6 +30,7 @@ from .parsestack import default_unparse_stack
 __all__ = [
     "AddEnclosingMiddleware",
     "BlockMiddleware",
+    "DateRangeMiddleware",
     "LatexDecodingMiddleware",
     "LatexEncodingMiddleware",
     "LibraryMiddleware",
@@ -46,6 +49,7 @@ __all__ = [
     "SortFieldsAlphabeticallyMiddleware",
     "SortFieldsCustomMiddleware",
     "SplitNameParts",
+    "collect_date_conflicts",
     "default_parse_stack",
     "default_unparse_stack",
 ]
