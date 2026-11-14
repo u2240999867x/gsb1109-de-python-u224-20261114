@@ -184,12 +184,61 @@ the ``compression.zstd`` module in the standard library is used.
   the ``backports.zstd`` or ``compression.zstd`` package is used.
 
 
+Merging sorted files
+--------------------
+
+``xopen.merge_sorted_files`` merges sorted, optionally compressed inputs into
+one output without opening all of them at once::
+
+    from xopen import merge_sorted_files
+
+    result = merge_sorted_files(
+        ["part-001.txt.gz", "part-002.txt.gz", "part-003.txt.gz"],
+        "all.txt.gz",
+        key=lambda line: line.split("\t")[0],
+        max_open_files=4,
+        manifest=True,
+    )
+    print(result.total_rows, result.duplicate_rows)
+
+The open-file limit includes input streams, temporary runs, and the output.
+With more inputs than the limit allows, the merge spills sorted runs to
+temporary files and performs multiple passes.  Reducing ``max_open_files``
+does not change the output order, the row counts, or the reported error.
+
+Inputs must be non-decreasing according to ``key``.  Equal keys are stable:
+rows are ordered by input position and then by one-based line number within
+that input.  Equal keys are never collapsed; ``duplicate_rows`` counts rows
+whose key occurred earlier in the output.  ``exact_duplicate_rows`` separately
+counts byte-identical rows.
+
+If an input is out of order, or if a stream fails while being read or closed
+(truncated compressed input is often only detected at close), the destination
+is left untouched and a ``MergeError`` reports ``source``, ``source_index``,
+``line_number`` and ``reason``.
+
+With ``manifest=True`` (or a path), a JSON manifest is written.  Its
+``"status"`` is ``"running"`` while work is in progress, ``"complete"`` only
+after every input has been read and closed successfully and the output has
+been installed, and ``"failed"`` with the error location otherwise.  A previous
+destination file is replaced atomically, so an incomplete merge never produces
+a completed manifest.
+
+The same entry point is available from the command line::
+
+    python -m xopen.merge --max-open-files 4 all.txt.gz part-*.txt.gz
+
+
 Changelog
 ---------
 
 development version
 ~~~~~~~~~~~~~~~~~~~
 
+* Added ``xopen.merge_sorted_files`` (also ``merge_files`` and
+  ``merge_sorted``) for bounded open-file merging of sorted, optionally
+  compressed inputs, with stable tie-breaking, monotonicity checking,
+  close-time error propagation, and a completion-gated manifest.
 * #181/#168: Added lz4 as supported compression format.
   Contributed by @Dev-iL and @gnzsnz.
 * PipedCompressionReader no longer has seek/tell methods. This only worked

@@ -5,6 +5,11 @@ Open compressed files transparently.
 __all__ = [
     "_PipedCompressionProgram",
     "__version__",
+    "MergeError",
+    "MergeResult",
+    "merge_files",
+    "merge_sorted",
+    "merge_sorted_files",
     "xopen",
 ]
 
@@ -888,3 +893,20 @@ def xopen(
     if "t" in mode:
         return io.TextIOWrapper(opened_file, encoding, errors, newline)
     return opened_file
+
+
+_MERGE_EXPORTS = frozenset(
+    {"MergeError", "MergeResult", "merge_files", "merge_sorted", "merge_sorted_files"}
+)
+
+
+def __getattr__(name):
+    if name == "merge":
+        import importlib
+
+        return importlib.import_module(f"{__name__}.merge")
+    if name in _MERGE_EXPORTS:
+        from . import merge as merge_module
+
+        return getattr(merge_module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
