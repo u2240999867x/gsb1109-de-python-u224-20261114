@@ -1,6 +1,9 @@
 ﻿EXIF.py Change Log
 ##################
 
+Unreleased
+    * Add a synthesized, sortable "EXIF CaptureTimestamp" built from DateTimeOriginal, DateTimeDigitized or Image DateTime, each combined with its own matching SubSecTime and OffsetTime tags; the result stays a naive local timestamp when its family has no offset, so an offset carried only by other fields (e.g. digitizing fields of a scanned negative) is never borrowed
+
 3.5.1 — 2025-08-23
     * Don't raise exception from decode_maker_note() if strict==False (#243) by Nathan Olson
 

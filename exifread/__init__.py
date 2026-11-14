@@ -9,6 +9,7 @@ from exifread.core.exceptions import ExifNotFound, InvalidExif
 from exifread.core.exif_header import ExifHeader
 from exifread.core.find_exif import determine_type, get_endian_str
 from exifread.core.xmp import find_xmp_data
+from exifread.datetime_utils import TIMESTAMP_TAG, build_capture_timestamp
 from exifread.exif_log import get_logger
 from exifread.serialize import convert_types
 from exifread.tags import DEFAULT_STOP_TAG
@@ -64,6 +65,11 @@ def process_file(
         The keys are a string in the format `"IFD_NAME TAG_NAME"`.
         If `builtin_types` is `False`, the value will be a `IfdTag` class, or bytes.
         IF `builtin_types` is `True`, the value will be a standard Python type.
+        When a usable date tag is present, an `"EXIF CaptureTimestamp"` key is
+        added holding a sortable ISO 8601 string built from the preferred date
+        tag (`DateTimeOriginal`, then `DateTimeDigitized`, then `DateTime`)
+        combined with its own sub-second and offset tags; the string is naive
+        when the chosen family has no matching offset.
     """
 
     if auto_seek:
@@ -133,6 +139,12 @@ def process_file(
     # parse XMP tags (experimental)
     if debug and details:
         _extract_xmp_data(hdr=hdr, fh=fh)
+
+    # Synthesize a sortable capture timestamp from the date tags and
+    # their matching sub-second / offset companions.
+    timestamp = build_capture_timestamp(hdr.tags)
+    if timestamp is not None:
+        hdr.tags[TIMESTAMP_TAG] = timestamp
 
     if builtin_types:
         return convert_types(hdr.tags)

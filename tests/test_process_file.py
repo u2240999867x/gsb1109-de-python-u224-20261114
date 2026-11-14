@@ -24,12 +24,12 @@ def test_corrupted_pass():
     with open(file_path, "rb") as fh:
         tags = exifread.process_file(fh=fh, strict=False)
     assert "EXIF Contrast" in tags
-    assert len(tags) == 69
+    assert len(tags) == 70
 
 
 @pytest.mark.parametrize("builtin_types", (True, False))
 @pytest.mark.parametrize(
-    "stop_tag, tag_count", (("ColorSpace", 39), (DEFAULT_STOP_TAG, 51))
+    "stop_tag, tag_count", (("ColorSpace", 40), (DEFAULT_STOP_TAG, 52))
 )
 def test_stop_at_tag(builtin_types, stop_tag, tag_count):
     file_path = RESOURCES_ROOT / "jpg/Canon_40D.jpg"

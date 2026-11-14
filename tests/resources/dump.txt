@@ -1,4 +1,5 @@
 Opening: tests/resources/avif/mountains.avif
+EXIF CaptureTimestamp (ASCII): 2024-04-05T10:59:24
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -53,6 +54,7 @@ Opening: tests/resources/heic/heic_hdlr_box.jpg
 No EXIF information found
 
 Opening: tests/resources/heic/mobile/HMD_Nokia_8.3_5G.heif
+EXIF CaptureTimestamp (ASCII): 2022-02-03T14:44:07.722000
 EXIF ExposureProgram (Short): Unidentified
 EXIF ExposureTime (Ratio): 1/5000
 EXIF FNumber (Ratio): 189/100
@@ -82,6 +84,7 @@ Image Orientation (Short): Horizontal (normal)
 Image Software (ASCII): 00WW_2_270_SP04
 
 Opening: tests/resources/heic/mobile/HMD_Nokia_8.3_5G_hdr.heif
+EXIF CaptureTimestamp (ASCII): 2022-01-12T07:30:14.364000
 EXIF ExposureProgram (Short): Unidentified
 EXIF ExposureTime (Ratio): 1/125
 EXIF FNumber (Ratio): 189/100
@@ -113,6 +116,7 @@ Image Software (ASCII): 00WW_2_270_SP04
 Opening: tests/resources/heic/mobile/iphone_13_pro_max.heic
 EXIF ApertureValue (Ratio): 27767/23734
 EXIF BrightnessValue (Signed Ratio): 51851/34780
+EXIF CaptureTimestamp (ASCII): 2022-02-16T12:55:41.762000+01:00
 EXIF ColorSpace (Short): Uncalibrated
 EXIF DateTimeDigitized (ASCII): 2022:02:16 12:55:41
 EXIF DateTimeOriginal (ASCII): 2022:02:16 12:55:41
@@ -213,6 +217,7 @@ Image YCbCrPositioning (Short): Centered
 Image YResolution (Ratio): 72
 
 Opening: tests/resources/heic/spring_1440x960.heic
+EXIF CaptureTimestamp (ASCII): 2020-12-03T15:04:31.040000
 EXIF DateTimeOriginal (ASCII): 2020:12:03 15:04:31
 EXIF SubSecTimeOriginal (ASCII): 04
 Image ExifOffset (Long): 26
@@ -220,6 +225,7 @@ Image ExifOffset (Long): 26
 Opening: tests/resources/jpg/Canon_40D.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 45/8
+EXIF CaptureTimestamp (ASCII): 2008-05-30T15:56:01
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CustomRendered (Short): Normal
@@ -272,6 +278,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/Canon_40D_photoshop_import.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-07-31T10:05:49
 EXIF ColorSpace (Short): sRGB
 EXIF ExifImageLength (Long): 77
 EXIF ExifImageWidth (Long): 100
@@ -292,6 +299,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/Canon_DIGITAL_IXUS_400.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 213/32
+EXIF CaptureTimestamp (ASCII): 2004-08-27T13:52:55
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 3
@@ -413,6 +421,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/Canon_PowerShot_S40.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 149/32
+EXIF CaptureTimestamp (ASCII): 2003-12-14T12:01:44
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 5
@@ -521,6 +530,7 @@ Thumbnail YResolution (Ratio): 180
 
 Opening: tests/resources/jpg/corrupted.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2015-09-08T11:02:17
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -593,6 +603,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/exif-org/canon-ixus.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 4
+EXIF CaptureTimestamp (ASCII): 2001-06-09T15:17:32
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 3
@@ -682,6 +693,7 @@ Opening: tests/resources/jpg/exif-org/fujifilm-dx10.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 41/10
 EXIF BrightnessValue (Signed Ratio): -27/10
+EXIF CaptureTimestamp (ASCII): 2001-04-12T20:33:14
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 7/5
@@ -733,6 +745,7 @@ Opening: tests/resources/jpg/exif-org/fujifilm-finepix40i.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 3
 EXIF BrightnessValue (Signed Ratio): 13/50
+EXIF CaptureTimestamp (ASCII): 2000-08-04T18:22:57
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 3/2
@@ -800,6 +813,7 @@ Opening: tests/resources/jpg/exif-org/fujifilm-mx1700.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 28/5
 EXIF BrightnessValue (Signed Ratio): 38/5
+EXIF CaptureTimestamp (ASCII): 2000-09-02T14:30:10
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 2
@@ -850,6 +864,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/exif-org/kodak-dc210.jpg
 EXIF ApertureValue (Ratio): 4
 EXIF BrightnessValue (Signed Ratio): 3/2
+EXIF CaptureTimestamp (ASCII): 2000-10-26T16:46:51
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 0/0
 EXIF DateTimeOriginal (ASCII): 2000:10:26 16:46:51
@@ -891,6 +906,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/exif-org/kodak-dc240.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 4
+EXIF CaptureTimestamp (ASCII): 1999-05-25T21:00:09
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF DateTimeDigitized (ASCII): 1999:05:25 21:00:09
@@ -935,6 +951,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/exif-org/nikon-e950.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2001-04-06T11:51:40
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 4
@@ -992,6 +1009,7 @@ Thumbnail YResolution (Ratio): 300
 
 Opening: tests/resources/jpg/exif-org/olympus-c960.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2000-11-07T10:41:43
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 1
@@ -1051,6 +1069,7 @@ Opening: tests/resources/jpg/exif-org/ricoh-rdc5300.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 4
 EXIF BrightnessValue (Signed Ratio): -2
+EXIF CaptureTimestamp (ASCII): 2000-05-31T21:50:40
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 3
@@ -1090,6 +1109,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/exif-org/sanyo-vpcg250.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 1998-01-01T00:00:00
 EXIF ColorSpace (Short): Uncalibrated
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 17/10
@@ -1130,6 +1150,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/exif-org/sanyo-vpcsx550.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2000-11-18T21:14:19
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 17/10
@@ -1174,6 +1195,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/exif-org/sony-cybershot.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2000-09-30T10:59:45
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 2
@@ -1221,6 +1243,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/exif-org/sony-d700.jpg
 EXIF ApertureValue (Ratio): 5/2
+EXIF CaptureTimestamp (ASCII): 1998-12-01T14:22:36
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 6
@@ -1266,6 +1289,7 @@ Opening: tests/resources/jpg/Fujifilm_FinePix6900ZOOM.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 4
 EXIF BrightnessValue (Signed Ratio): 749/100
+EXIF CaptureTimestamp (ASCII): 2001-02-19T06:40:05
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 16/5
@@ -1334,6 +1358,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/Fujifilm_FinePix_E500.jpg
 EXIF ApertureValue (Ratio): 31/10
 EXIF BrightnessValue (Signed Ratio): 239/50
+EXIF CaptureTimestamp (ASCII): 2006-08-17T09:24:48
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 4
@@ -1406,6 +1431,7 @@ MakerNote WhiteBalance (Short): Auto
 
 Opening: tests/resources/jpg/gps/DSCN0010.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T16:28:39
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -1507,6 +1533,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/gps/DSCN0012.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T16:29:49
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -1608,6 +1635,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/gps/DSCN0021.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T16:38:20
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -1709,6 +1737,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/gps/DSCN0025.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T16:43:21
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -1810,6 +1839,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/gps/DSCN0027.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T16:44:01
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -1911,6 +1941,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/gps/DSCN0029.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T16:46:53
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -2012,6 +2043,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/gps/DSCN0038.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T16:52:15
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -2113,6 +2145,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/gps/DSCN0040.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T16:55:37
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -2214,6 +2247,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/gps/DSCN0042.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-10-22T17:00:07
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -2317,6 +2351,7 @@ Opening: tests/resources/jpg/hdr/canon_hdr_NO.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 159/32
 EXIF CameraOwnerName (ASCII):
+EXIF CaptureTimestamp (ASCII): 2015-02-09T22:47:44
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 3
@@ -2454,6 +2489,7 @@ Opening: tests/resources/jpg/hdr/canon_hdr_YES.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 159/32
 EXIF CameraOwnerName (ASCII):
+EXIF CaptureTimestamp (ASCII): 2015-02-09T22:48:10
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 3
@@ -2591,6 +2627,7 @@ Opening: tests/resources/jpg/hdr/iphone_hdr_NO.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 7983/3509
 EXIF BrightnessValue (Signed Ratio): 4481/847
+EXIF CaptureTimestamp (ASCII): 2015-04-10T20:12:23.016000
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CustomRendered (Short): 4
@@ -2669,6 +2706,7 @@ Opening: tests/resources/jpg/hdr/iphone_hdr_YES.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 7983/3509
 EXIF BrightnessValue (Signed Ratio): 6979/1322
+EXIF CaptureTimestamp (ASCII): 2015-04-10T20:12:23.550000
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CustomRendered (Short): 3
@@ -2767,6 +2805,7 @@ No EXIF information found
 Opening: tests/resources/jpg/Kodak_CX7530.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 22/5
+EXIF CaptureTimestamp (ASCII): 2005-08-13T09:47:23
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -2826,6 +2865,7 @@ Thumbnail JPEGInterchangeFormatLength (Long): 1918
 Opening: tests/resources/jpg/Konica_Minolta_DiMAGE_Z3.jpg
 File has JPEG thumbnail
 EXIF BrightnessValue (Signed Ratio): -1/2
+EXIF CaptureTimestamp (ASCII): 2005-03-10T15:10:48
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -2884,6 +2924,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/long_description.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-07-31T10:50:00
 EXIF ColorSpace (Short): sRGB
 EXIF ExifImageLength (Long): 73
 EXIF ExifImageWidth (Long): 100
@@ -2903,6 +2944,7 @@ Thumbnail JPEGInterchangeFormatLength (Long): 1322
 
 Opening: tests/resources/jpg/mobile/HMD_Nokia_8.3_5G.jpg
 EXIF ApertureValue (Ratio): 11/5
+EXIF CaptureTimestamp (ASCII): 2022-08-14T14:12:31+03:00
 EXIF DateTimeOriginal (ASCII): 2022:08:14 14:12:31
 EXIF ExposureProgram (Short): Unidentified
 EXIF ExposureTime (Ratio): 541/1000000
@@ -2932,6 +2974,7 @@ Image Software (ASCII): 00WW_3_380_SP02
 
 Opening: tests/resources/jpg/mobile/HMD_Nokia_8.3_5G_hdr.jpg
 EXIF ApertureValue (Ratio): 189/100
+EXIF CaptureTimestamp (ASCII): 2021-07-29T21:28:46+03:00
 EXIF DateTimeOriginal (ASCII): 2021:07:29 21:28:46
 EXIF ExposureProgram (Short): Unidentified
 EXIF ExposureTime (Ratio): 8333/500000
@@ -2961,6 +3004,7 @@ Image Software (ASCII): 00WW_2_270_SP01
 
 Opening: tests/resources/jpg/mobile/jolla.jpg
 EXIF ApertureValue (Ratio): 334328577/132351334
+EXIF CaptureTimestamp (ASCII): 2014-09-21T16:00:56
 EXIF DateTimeOriginal (ASCII): 2014:09:21 16:00:56
 EXIF ExifVersion (Undefined): 0230
 EXIF ExposureBiasValue (Signed Ratio): 0
@@ -2985,6 +3029,7 @@ Image YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/Nikon_COOLPIX_P1.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-03-07T09:55:46
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 2
@@ -3073,6 +3118,7 @@ Thumbnail YResolution (Ratio): 300
 Opening: tests/resources/jpg/Nikon_D70.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 126797/20000
+EXIF CaptureTimestamp (ASCII): 2008-03-15T09:52:01
 EXIF ColorSpace (Short): sRGB
 EXIF DateTimeOriginal (ASCII): 2008:03:15 09:52:01
 EXIF ExifImageLength (Long): 66
@@ -3106,6 +3152,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/Olympus_C8080WZ.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2006-10-22T15:44:29
 EXIF ColorSpace (Short): Uncalibrated
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 4
@@ -3314,6 +3361,7 @@ Thumbnail JPEGInterchangeFormatLength (Long): 2251
 
 Opening: tests/resources/jpg/Panasonic_DMC-FZ30.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-07-16T11:33:20
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 4
@@ -3372,6 +3420,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/Pentax_K10D.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2008-05-04T16:47:24
 EXIF ColorSpace (Short): sRGB
 EXIF DateTimeDigitized (ASCII): 2008:05:04 16:47:24
 EXIF DateTimeOriginal (ASCII): 2008:05:04 16:47:24
@@ -3433,6 +3482,7 @@ Image YResolution (Ratio): 72
 Opening: tests/resources/jpg/Ricoh_Caplio_RR330.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 4
+EXIF CaptureTimestamp (ASCII): 2004-08-31T19:52:58
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF DateTimeDigitized (ASCII): 2004:08:31 19:52:58
@@ -3475,6 +3525,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/Samsung_Digimax_i50_MP3.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 29/8
+EXIF CaptureTimestamp (ASCII): 2006-08-15T17:50:57
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 2512717/629856
@@ -3535,6 +3586,7 @@ Opening: tests/resources/jpg/Sony_alpha_a58.JPG
 Unexpected slice length: 1
 File has JPEG thumbnail
 EXIF BrightnessValue (Signed Ratio): -1543/1280
+EXIF CaptureTimestamp (ASCII): 2023-10-28T21:42:29
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 0
@@ -3724,6 +3776,7 @@ Opening: tests/resources/jpg/Sony_DSLR-A200.jpg
 Possibly corrupted field Tag 0x0000 in MakerNote IFD
 File has JPEG thumbnail
 EXIF BrightnessValue (Signed Ratio): 387/100
+EXIF CaptureTimestamp (ASCII): 2007-01-01T00:00:00
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 8
@@ -3819,6 +3872,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/Sony_HDR-HC3.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2007-06-15T04:42:32
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 2
@@ -3868,6 +3922,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/tests/11-tests.jpg
 EXIF ApertureValue (Ratio): 95/32
+EXIF CaptureTimestamp (ASCII): 2007-09-03T16:03:45
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 3
@@ -3980,6 +4035,7 @@ MakerNote WhiteBalance (Proprietary): Auto
 Opening: tests/resources/jpg/tests/22-canon_tags.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 95/32
+EXIF CaptureTimestamp (ASCII): 2007-11-29T16:16:21
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 3
@@ -4106,6 +4162,7 @@ Opening: tests/resources/jpg/tests/28-hex_value.jpg
 Possibly corrupted field Tag 0x0001 in MakerNote IFD
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 159/32
+EXIF CaptureTimestamp (ASCII): 2008-08-21T14:53:03
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 5
@@ -4199,6 +4256,7 @@ Thumbnail YResolution (Ratio): 1/96
 Opening: tests/resources/jpg/tests/30-type_error.jpg
 Possibly corrupted IFD: EXIF
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2013-07-07T17:20:59
 Image Copyright (ASCII): Francisco Gonzalez
 Image DateTime (ASCII): 2013:07:07 17:20:59
 Image ExifOffset (ASCII):
@@ -4217,6 +4275,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/tests/32-lens_data.jpeg
 File has JPEG thumbnail
 EXIF CVAPattern (Undefined): [0, 2, 0, 2, 0, 1, 1, 2]
+EXIF CaptureTimestamp (ASCII): 2012-07-14T16:30:12.680000
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 2
@@ -4332,6 +4391,7 @@ Thumbnail YResolution (Ratio): 300
 Opening: tests/resources/jpg/tests/33-type_error.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 290241/62500
+EXIF CaptureTimestamp (ASCII): 2008-05-25T19:31:26
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): Y
 EXIF CompressedBitsPerPixel (Ratio): 5
@@ -4390,6 +4450,7 @@ Possibly corrupted field RecordingMode in MakerNote IFD
 Possibly corrupted field RecordingMode in MakerNote IFD
 Possibly corrupted field Tag 0x3800 in MakerNote IFD
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2005-07-19T18:25:29
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 275/54
@@ -4460,6 +4521,7 @@ Opening: tests/resources/jpg/tests/36-memory_error.jpg
 Possibly corrupted field RecordingMode in MakerNote IFD
 Possibly corrupted field RecordingMode in MakerNote IFD
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2002-04-21T00:30:33
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 12/25
@@ -4527,6 +4589,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/tests/42_IndexError.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2014-08-23T13:05:43
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Hard
@@ -4630,6 +4693,7 @@ Thumbnail YResolution (Ratio): 72
 Opening: tests/resources/jpg/tests/45-gps_ifd.jpg
 No values found for GPS SubIFD
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2012-06-23T06:55:49
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF DateTimeDigitized (ASCII): 2012:06:23 06:55:49
@@ -4672,6 +4736,7 @@ Opening: tests/resources/jpg/tests/46_UnicodeEncodeError.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 126797/20000
 EXIF BodySerialNumber (ASCII): 2131400336
+EXIF CaptureTimestamp (ASCII): 2012-06-22T19:52:31
 EXIF CustomRendered (Short): Normal
 EXIF DateTimeDigitized (ASCII): 2012:06:22 19:52:31
 EXIF DateTimeOriginal (ASCII): 2012:06:22 19:52:31
@@ -4720,6 +4785,7 @@ Thumbnail XResolution (Ratio): 72
 Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/tests/67-0_length_string.jpg
+EXIF CaptureTimestamp (ASCII): 2016-09-12T10:05:31
 EXIF ColorSpace (Short): sRGB
 EXIF ExifImageLength (Long): 2012
 EXIF ExifImageWidth (Long): 4032
@@ -4756,6 +4822,7 @@ File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 4857981/500000
 EXIF BodySerialNumber (ASCII): -1000f46
 EXIF CVAPattern (Undefined): [0, 2, 0, 2, 2, 1, 1, 0]
+EXIF CaptureTimestamp (ASCII): 2005-12-14T14:39:47
 EXIF ColorSpace (Short): Uncalibrated
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 2
@@ -4885,6 +4952,7 @@ Opening: tests/resources/jpg/tests/nikon_D3100_TypeError.jpg
 Possibly corrupted field FlashCompensation in MakerNote IFD
 File has JPEG thumbnail
 EXIF CVAPattern (Undefined): [0, 2, 0, 2, 1, 2, 0, 1]
+EXIF CaptureTimestamp (ASCII): 2017-06-05T07:08:42
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF Contrast (Short): Normal
@@ -4968,6 +5036,7 @@ Opening: tests/resources/jpg/tests/Xiaomi_Mi_9T_KeyError.jpg
 File has JPEG thumbnail
 EXIF ApertureValue (Ratio): 161/100
 EXIF BrightnessValue (Signed Ratio): -221/100
+EXIF CaptureTimestamp (ASCII): 2022-07-16T16:27:30.360058
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF DateTimeDigitized (ASCII): 2022:07:16 16:27:30
@@ -5026,6 +5095,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/WWL_Polaroid_ION230.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2026-11-24T14:41:16
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 2
@@ -5071,6 +5141,7 @@ Thumbnail YResolution (Ratio): 72
 
 Opening: tests/resources/jpg/xmp/BlueSquare.jpg
 File has JPEG thumbnail
+EXIF CaptureTimestamp (ASCII): 2005-09-07T15:09:51
 EXIF ColorSpace (Short): sRGB
 EXIF ExifImageLength (Long): 216
 EXIF ExifImageWidth (Long): 360
@@ -5093,6 +5164,7 @@ Opening: tests/resources/jpg/xmp/no_exif.jpg
 No EXIF information found
 
 Opening: tests/resources/jxl/test_0001.jxl
+EXIF CaptureTimestamp (ASCII): 2025-08-15T22:25:54
 EXIF DateTimeOriginal (ASCII): 2025:08:15 22:25:54
 EXIF FocalLength (Ratio): 14
 EXIF FocalPlaneResolutionUnit (Short): 3
@@ -5123,6 +5195,7 @@ Opening: tests/resources/raw/nikon_z_9_high_efficiency_compressed_dx_cropped_max
 EXIF ApertureValue (Ratio): 526069/1000000
 EXIF BodySerialNumber (ASCII): 3020326
 EXIF CVAPattern (Undefined): [2, 0, 2, 0, 0, 1, 1, 2]
+EXIF CaptureTimestamp (ASCII): 2025-08-10T19:02:53.270000+03:00
 EXIF Contrast (Short): Normal
 EXIF CustomRendered (Short): Custom
 EXIF DateTimeDigitized (ASCII): 2025:08:10 19:02:53
@@ -5258,6 +5331,7 @@ Image YCbCrSubSampling (Short): [1, 1]
 Opening: tests/resources/raw/nikon_z_9_high_efficiency_compressed_dx_cropped_max_overexposed.nef
 EXIF BodySerialNumber (ASCII): 3020326
 EXIF CVAPattern (Undefined): [2, 0, 2, 0, 0, 1, 1, 2]
+EXIF CaptureTimestamp (ASCII): 2025-08-10T19:02:53.270000+03:00
 EXIF Contrast (Short): Normal
 EXIF CustomRendered (Short): Custom
 EXIF DateTimeDigitized (ASCII): 2025:08:10 19:02:53
@@ -5480,6 +5554,7 @@ MakerNote WorldTime (Undefined): [180, 0, 0, 0]
 
 Opening: tests/resources/raw/sony_alpha_a7iii_raw_image.ARW
 EXIF BrightnessValue (Signed Ratio): -3483/1280
+EXIF CaptureTimestamp (ASCII): 2024-09-14T13:54:44+02:00
 EXIF ColorSpace (Short): sRGB
 EXIF ComponentsConfiguration (Undefined): YCbCr
 EXIF CompressedBitsPerPixel (Ratio): 8
@@ -5672,6 +5747,7 @@ Image StripByteCounts (Long): [43680, 43983, 41422, 66002, 59709, 27792, 1744]
 Image StripOffsets (Long): [8, 43688, 87671, 129093, 195095, 254804, 282596]
 
 Opening: tests/resources/tiff/Crémieux11.tiff
+EXIF CaptureTimestamp (ASCII): 2012-01-09T22:52:11
 Image Artist (ASCII): Jean Cornillon
 Image BitsPerSample (Short): [8, 8, 8, 8]
 Image Compression (Short): LZW
@@ -5695,6 +5771,7 @@ Image XResolution (Ratio): 72
 Image YResolution (Ratio): 72
 
 Opening: tests/resources/tiff/DudleyLeavittUtah.tiff
+EXIF CaptureTimestamp (ASCII): 2009-09-26T01:11:52
 Image Artist (ASCII): Russell Leavitt
 Image BitsPerSample (Short): [8, 8, 8, 8]
 Image Compression (Short): LZW

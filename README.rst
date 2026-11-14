@@ -125,6 +125,31 @@ Tags are divided into these main categories:
 - ``MakerNote``: Manufacturer specific information. There are no official published references for these tags.
 
 
+Capture Timestamp
+*****************
+
+When any date tag is present, the results also contain a synthesized
+``EXIF CaptureTimestamp`` key holding a sortable ISO 8601 string. This matters
+for scanned negatives, where the re-scan date can be decades newer than the
+original shot.
+
+The date tags are tried in capture order: ``DateTimeOriginal``, then
+``DateTimeDigitized``, then the generic ``Image DateTime``. Each one is only
+combined with its own matching companions:
+
+- ``SubSecTimeOriginal`` / ``SubSecTimeDigitized`` / ``SubSecTime``
+- ``OffsetTimeOriginal`` / ``OffsetTimeDigitized`` / ``OffsetTime``
+
+A matching offset produces an aware timestamp, e.g.
+``2024-06-01T09:00:00.090000+08:00``. When the chosen family has no offset,
+the wall-clock time is kept as a naive local timestamp without any suffix,
+e.g. ``1985-03-07T23:59:59.090000``; an offset carried by another family
+(such as the digitizing fields) is never borrowed. UTC exporters can therefore
+detect the missing offset directly from the string and still inspect the
+original tags to see why a photo is absent from the UTC timeline. The source
+date, sub-second and offset tags are always preserved unchanged.
+
+
 Processing Options
 ******************
 
