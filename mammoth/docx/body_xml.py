@@ -185,10 +185,50 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
                     ),
                     alignment=alignment,
                     indent=indent,
+                    outline_level=style[2],
+                    is_outline_level_explicit=style[3],
+                    outline_style_cycle=style[4],
                 )).append_extra()
 
     def _read_paragraph_style(properties):
-        return _read_style(properties, "w:pStyle", "Paragraph", styles.find_paragraph_style_by_id)
+        style_result = _read_style(properties, "w:pStyle", "Paragraph", styles.find_paragraph_style_by_id)
+        style_id = style_result.elements[0]
+        outline_level, is_explicit, cycle = _read_paragraph_outline_level(properties, style_id)
+        return _ReadResult(
+            style_result.elements + [outline_level, is_explicit, cycle],
+            style_result.extra,
+            style_result.messages,
+        )
+
+    def _read_paragraph_outline_level(properties, style_id):
+        value = properties \
+            .find_child_or_null("w:outlineLvl") \
+            .attributes.get("w:val")
+        has_direct_level, direct_level = _read_outline_level_value(value)
+        if has_direct_level:
+            return direct_level, True, ()
+
+        find_outline_level = getattr(styles, "find_paragraph_outline_level", None)
+        if find_outline_level is None:
+            return None, False, ()
+        outline_level = find_outline_level(style_id)
+        return outline_level.level, False, outline_level.cycle
+
+    def _read_outline_level_value(value):
+        if value is None:
+            return False, None
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return False, None
+
+        if value == 9:
+            # 17.3.1.20 outlineLvl: 9 means body text.
+            return True, None
+        elif 0 <= value <= 8:
+            return True, value + 1
+        else:
+            return False, None
 
     def current_hyperlink_kwargs():
         for complex_field in reversed(complex_field_stack):

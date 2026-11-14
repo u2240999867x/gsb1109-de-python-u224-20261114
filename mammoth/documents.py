@@ -22,6 +22,19 @@ class Paragraph(HasChildren):
     numbering = cobble.field()
     alignment = cobble.field()
     indent = cobble.field()
+    outline_level = cobble.field(default=None)
+    is_outline_level_explicit = cobble.field(default=None)
+    outline_style_cycle = cobble.field(default=None)
+
+    @property
+    def heading_level(self):
+        return self.outline_level
+
+    @property
+    def outline_level_index(self):
+        if self.outline_level is None:
+            return None
+        return self.outline_level - 1
 
 
 @cobble.data
@@ -126,11 +139,31 @@ def document(children, notes=None, comments=None):
         comments = []
     return Document(children, notes, comments=comments)
 
-def paragraph(children, style_id=None, style_name=None, numbering=None, alignment=None, indent=None):
+def paragraph(
+    children,
+    style_id=None,
+    style_name=None,
+    numbering=None,
+    alignment=None,
+    indent=None,
+    outline_level=None,
+    is_outline_level_explicit=False,
+    outline_style_cycle=None,
+):
     if indent is None:
         indent = paragraph_indent()
 
-    return Paragraph(children, style_id, style_name, numbering, alignment=alignment, indent=indent)
+    return Paragraph(
+        children=children,
+        style_id=style_id,
+        style_name=style_name,
+        numbering=numbering,
+        alignment=alignment,
+        indent=indent,
+        outline_level=outline_level,
+        is_outline_level_explicit=is_outline_level_explicit,
+        outline_style_cycle=outline_style_cycle or (),
+    )
 
 def paragraph_indent(start=None, end=None, first_line=None, hanging=None):
     return ParagraphIndent(start=start, end=end, first_line=first_line, hanging=hanging)

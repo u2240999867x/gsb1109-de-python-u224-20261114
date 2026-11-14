@@ -1952,3 +1952,67 @@ class _NumberingMap(object):
 
     def find_level_by_paragraph_style_id(self, style_id):
         return self._levels_by_paragraph_style_id.get(style_id)
+
+
+class ParagraphOutlineLevelTests(object):
+    def test_paragraph_has_no_outline_level_without_properties_or_style(self):
+        paragraph = _read_and_get_document_xml_element(xml_element("w:p"))
+        assert_equal(None, paragraph.outline_level)
+        assert_equal(False, paragraph.is_outline_level_explicit)
+
+    def test_direct_outline_level_is_read_as_one_based_level(self):
+        paragraph = _read_and_get_document_xml_element(_paragraph_with_outline_level(0))
+        assert_equal(1, paragraph.outline_level)
+        assert_equal(True, paragraph.is_outline_level_explicit)
+
+    def test_direct_outline_level_9_is_read_as_body_text(self):
+        paragraph = _read_and_get_document_xml_element(_paragraph_with_outline_level(9))
+        assert_equal(None, paragraph.outline_level)
+        assert_equal(True, paragraph.is_outline_level_explicit)
+
+    def test_direct_outline_level_overrides_style_outline_level(self):
+        paragraph_xml = xml_element("w:p", {}, [
+            xml_element("w:pPr", {}, [
+                xml_element("w:pStyle", {"w:val": "Heading2"}),
+                xml_element("w:outlineLvl", {"w:val": "2"}),
+            ]),
+        ])
+        styles = Styles.create(paragraph_styles={
+            "Heading2": Style(
+                style_id="Heading2",
+                name="Heading 2",
+                outline_level=1,
+            ),
+        })
+
+        paragraph = _read_and_get_document_xml_element(paragraph_xml, styles=styles)
+
+        assert_equal(3, paragraph.outline_level)
+        assert_equal(True, paragraph.is_outline_level_explicit)
+
+    def test_style_outline_level_is_used_if_no_direct_outline_level(self):
+        paragraph_xml = xml_element("w:p", {}, [
+            xml_element("w:pPr", {}, [
+                xml_element("w:pStyle", {"w:val": "Heading2"}),
+            ]),
+        ])
+        styles = Styles.create(paragraph_styles={
+            "Heading2": Style(
+                style_id="Heading2",
+                name="Heading 2",
+                outline_level=1,
+            ),
+        })
+
+        paragraph = _read_and_get_document_xml_element(paragraph_xml, styles=styles)
+
+        assert_equal(2, paragraph.outline_level)
+        assert_equal(False, paragraph.is_outline_level_explicit)
+
+
+def _paragraph_with_outline_level(outline_level):
+    return xml_element("w:p", {}, [
+        xml_element("w:pPr", {}, [
+            xml_element("w:outlineLvl", {"w:val": str(outline_level)}),
+        ]),
+    ])

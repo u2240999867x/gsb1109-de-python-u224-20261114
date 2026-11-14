@@ -12,6 +12,7 @@ from .styles_xml import read_styles_xml_element, Styles
 from .notes_xml import read_endnotes_xml_element, read_footnotes_xml_element
 from .comments_xml import read_comments_xml_element
 from .files import Files
+from .outline import extract_section_tree, extract_outline
 from . import body_xml, office_xml
 from ..zips import open_zip
 

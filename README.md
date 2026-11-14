@@ -342,6 +342,52 @@ Each paragraph is followed by two newlines.
 
   * `messages`: any messages, such as errors and warnings
 
+#### `mammoth.extract_section_tree(fileobj)`
+
+Extracts the chapter tree implied by outline levels in the document.
+Unlike `convert_to_html`, this uses the outline structure rather than style names:
+a paragraph's `w:outlineLvl` is used directly when present,
+and otherwise the level is inherited through the paragraph style's `basedOn` chain.
+`w:outlineLvl` values `0` to `8` become section levels `1` to `9`,
+and `w:outlineLvl` value `9` explicitly marks body text,
+so that paragraph is left out of the tree.
+A style that inherits its level from another style is followed to the first style
+that defines an outline level.
+If two styles inherit from each other without either defining a level,
+the paragraph has no reliable level: it is left out of the tree,
+listed on `value.unresolved`, and reported in `messages` with its paragraph position.
+
+* `fileobj`: a file-like object containing the source document.
+  Files should be opened in binary mode.
+
+* Returns a result with the following properties:
+
+  * `value`: the section tree.
+    It is a sequence of root sections in document order.
+    Each section has:
+
+    * `title`: the text of the heading paragraph
+
+    * `level`: the outline level, starting at `1`
+
+    * `paragraph_index`: the zero-based position of the heading paragraph
+      in document order, including paragraphs inside tables
+
+    * `paragraph_number`: the one-based form of `paragraph_index`
+
+    * `paragraph`: the underlying `documents.Paragraph`
+
+    * `children`: the sections nested directly beneath this section
+
+    * `unresolved`: on the tree itself,
+      paragraphs whose style inheritance cycle has no reliable outline level
+
+  * `messages`: any messages, such as errors and warnings
+
+#### `mammoth.extract_outline(fileobj)`
+
+An alias for `mammoth.extract_section_tree`.
+
 #### `mammoth.embed_style_map(fileobj, style_map)`
 
 Embeds the style map `style_map` into `fileobj`.

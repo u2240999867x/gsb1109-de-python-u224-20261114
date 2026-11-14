@@ -38,6 +38,9 @@ class Styles(object):
     def find_numbering_style_by_id(self, style_id):
         return self._numbering_styles.get(style_id)
 
+    def find_paragraph_outline_level(self, style_id):
+        return resolve_paragraph_outline_level(style_id, self.find_paragraph_style_by_id)
+
 
 Styles.EMPTY = Styles(
     paragraph_styles={},
@@ -89,13 +92,73 @@ def read_styles_xml_element(element):
     )
 
 
-Style = collections.namedtuple("Style", ["style_id", "name"])
+Style = collections.namedtuple(
+    "Style",
+    ["style_id", "name", "based_on", "outline_level"],
+    defaults=(None, None),
+)
+
+
+OutlineLevel = collections.namedtuple("OutlineLevel", ["level", "cycle"])
+
+
+def resolve_paragraph_outline_level(style_id, find_paragraph_style_by_id):
+    if style_id is None:
+        return OutlineLevel(level=None, cycle=())
+
+    visited = []
+    current_style_id = style_id
+    while current_style_id is not None:
+        if current_style_id in visited:
+            cycle = tuple(visited[visited.index(current_style_id):] + [current_style_id])
+            return OutlineLevel(level=None, cycle=cycle)
+
+        visited.append(current_style_id)
+        style = find_paragraph_style_by_id(current_style_id)
+        if style is None:
+            return OutlineLevel(level=None, cycle=())
+
+        outline_level = getattr(style, "outline_level", None)
+        if outline_level is not None:
+            # 17.3.1.20 outlineLvl: 0 to 8 are outline levels, and 9 means
+            # that the paragraph is body text.
+            if outline_level == 9:
+                return OutlineLevel(level=None, cycle=())
+            elif 0 <= outline_level <= 8:
+                return OutlineLevel(level=outline_level + 1, cycle=())
+            else:
+                return OutlineLevel(level=None, cycle=())
+
+        current_style_id = getattr(style, "based_on", None)
+
+    return OutlineLevel(level=None, cycle=())
 
 
 def _read_style_element(element):
     style_id = _read_style_id(element)
     name = element.find_child_or_null("w:name").attributes.get("w:val")
-    return Style(style_id=style_id, name=name)
+    based_on = element.find_child_or_null("w:basedOn").attributes.get("w:val")
+    outline_level = _read_int(
+        element
+        .find_child_or_null("w:pPr")
+        .find_child_or_null("w:outlineLvl")
+        .attributes.get("w:val")
+    )
+    return Style(
+        style_id=style_id,
+        name=name,
+        based_on=based_on,
+        outline_level=outline_level,
+    )
+
+
+def _read_int(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 NumberingStyle = collections.namedtuple("NumberingStyle", ["style_id", "num_id"])

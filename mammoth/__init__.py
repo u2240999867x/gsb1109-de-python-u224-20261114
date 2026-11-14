@@ -1,8 +1,25 @@
-from . import docx, conversion, options, images, transforms, underline
+from . import docx, conversion, options, images, transforms, underline, outline
 from .raw_text import extract_raw_text_from_element
 from .docx.style_map import write_style_map, read_style_map
+from .outline import (
+    extract_section_tree,
+    extract_section_tree_from_document,
+    extract_outline,
+    Section,
+    SectionTree,
+    UnresolvedParagraph,
+)
 
-__all__ = ["convert_to_html", "extract_raw_text", "images", "transforms", "underline"]
+__all__ = [
+    "convert_to_html",
+    "extract_raw_text",
+    "extract_section_tree",
+    "extract_outline",
+    "extract_section_tree_from_document",
+    "images",
+    "transforms",
+    "underline",
+]
 
 
 _undefined = object()
