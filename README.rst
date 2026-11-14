@@ -66,6 +66,7 @@ signature::
     errors: Optional[str] = None,
     newline: Optional[str] = None,
     format: Optional[str] = None,
+    closefd: Optional[bool] = None,
   ) -> IO
 
 The function opens the file using a function suitable for the detected
@@ -121,6 +122,49 @@ This can either be done by using a subprocess to an external application or
 using a library that supports threads.
 
 Set threads to 0 to force xopen to use only the main Python thread.
+
+**closefd**:
+Controls ownership when *filename* is a file object rather than a path.
+With ``False`` the object is *borrowed*: xopen reads or writes through it but
+never closes it. With ``True`` it is *taken over* and closed when the returned
+reader or writer is closed. It defaults to ``True`` for file-name arguments and
+``False`` for file objects. Passing ``closefd=False`` together with a file name
+raises ``ValueError`` because there is no external handle to borrow.
+
+
+Borrowing and handing off streams
+---------------------------------
+
+A batch pipeline sometimes lets a *sampler* read the first few records of an
+external binary stream and then passes the rest to a main parser. Open the
+caller-provided stream in borrow mode (the default for file objects) so that
+closing the sampler never shuts the external handle, even if it exits with an
+error::
+
+    from xopen import xopen, handoff
+
+    with open("data.gz", "rb") as handle:          # external binary stream
+        sampler = xopen(handle, "rb")               # borrowed, not taken over
+        first = sampler.readline()
+        hand = handoff(sampler)                     # capture read-ahead bytes
+        sampler.close()                             # handle stays open
+        assert not handle.closed
+        with hand.open() as parser:                 # continue from handoff point
+            rest = parser.read()
+        assert first + rest == xopen("data.gz", "rb").read()
+
+``handoff`` returns a :class:`Handoff`. Its ``pending`` attribute holds the
+business bytes the sampler had already buffered (for example inflated by a
+decompressor) but not yet consumed, and ``open()`` returns a reader that yields
+those bytes first and then the remainder of the stream. The same contract
+applies to plain and to compressed input, to binary and to text readers, and to
+piped as well as in-process backends. Concatenating the bytes the sampler
+consumed with what the successor reads reproduces the original input byte for
+byte. Text readers additionally remember their ``encoding``, ``errors`` and
+``newline`` so the successor can be opened in the same text mode.
+
+Binary handoff stays fully streaming; only the bytes already buffered inside the
+reader are materialized.
 
 
 Backends

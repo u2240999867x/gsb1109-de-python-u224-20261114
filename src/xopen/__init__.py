@@ -3,8 +3,10 @@ Open compressed files transparently.
 """
 
 __all__ = [
+    "Handoff",
     "_PipedCompressionProgram",
     "__version__",
+    "handoff",
     "xopen",
 ]
 
@@ -22,7 +24,7 @@ import tempfile
 import threading
 import time
 from types import ModuleType
-from typing import IO, BinaryIO, Literal, overload
+from typing import IO, BinaryIO, Callable, Literal, overload
 
 from ._version import version as __version__
 
@@ -413,6 +415,367 @@ class _PipedCompressionProgram(io.IOBase):
         return None
 
 
+# Number of business bytes requested from a reader's buffer when taking over a
+# stream. The actual amount returned depends on the underlying buffer, but the
+# handoff always drains exactly as many bytes as it captured, so this only
+# controls how much read-ahead data is surfaced.
+HANDOFF_PEEK_SIZE = 1024 * 1024
+
+
+def _noop_close() -> None:
+    # Used to neutralize a TextIOWrapper after its buffer has been detached.
+    return None
+
+
+class _ManagedStream(io.BufferedIOBase):
+    """
+    Wrap a binary stream while making its ownership explicit.
+
+    Every operation is forwarded to the wrapped stream. ``close()`` only shuts
+    the wrapped stream when ``own`` is True (take-over); with ``own`` False the
+    handle is *borrowed* and kept alive so an abnormal reader exit or an explicit
+    close cannot close the caller's handle. This makes the ownership contract
+    identical for plain and compressed, binary and text, piped and in-process
+    backends (some of which never close a file object they are given).
+    """
+
+    def __init__(self, stream: BinaryIO, own: bool):
+        super().__init__()
+        self._stream = stream
+        self._own = own
+        self._is_closed = False
+
+    def readable(self) -> bool:
+        return self._stream.readable()
+
+    def writable(self) -> bool:
+        return self._stream.writable()
+
+    def seekable(self) -> bool:
+        return self._stream.seekable()
+
+    def read(self, *args) -> bytes:
+        return self._stream.read(*args)
+
+    def read1(self, *args) -> bytes:
+        stream = self._stream
+        read1 = getattr(stream, "read1", None)
+        if read1 is not None:
+            return read1(*args)
+        return stream.read(*args)
+
+    def readinto(self, *args):
+        return self._stream.readinto(*args)
+
+    def readline(self, *args) -> bytes:
+        return self._stream.readline(*args)
+
+    def write(self, arg: bytes) -> int:
+        return self._stream.write(arg)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def tell(self):
+        return self._stream.tell()
+
+    def seek(self, *args):
+        return self._stream.seek(*args)
+
+    def fileno(self):
+        return self._stream.fileno()
+
+    @property
+    def name(self):
+        return getattr(self._stream, "name", "")
+
+    @property
+    def closed(self) -> bool:
+        return self._is_closed
+
+    def close(self) -> None:
+        if self._is_closed:
+            return
+        self._is_closed = True
+        if self._own:
+            # Take-over: we are responsible for the underlying external handle.
+            self._stream.close()
+        # Borrowed stream: detach ourselves but keep the wrapped handle alive.
+
+    def __getattr__(self, item):
+        # Forward any attribute we did not override (e.g. ``peek``, ``raw``).
+        return getattr(self._stream, item)
+
+
+class _OwningReader(_ManagedStream):
+    """
+    Take-over wrapper for a backend reader that does not close its file object.
+
+    Native decompressors (and the piped program wrapper in non-owning mode) do
+    not close a file object handed to them. This wrapper closes that reader and
+    then the managed stream underneath, so a taken-over external handle is
+    released exactly once when the top-level reader is closed.
+    """
+
+    def __init__(self, reader: BinaryIO, managed: "_ManagedStream"):
+        super().__init__(reader, own=True)
+        self._managed = managed
+
+    def close(self) -> None:
+        if self._is_closed:
+            return
+        self._is_closed = True
+        try:
+            self._stream.close()  # close the backend reader
+        finally:
+            self._managed.close()  # close the external handle it owns
+
+
+class _ChainedReader(io.BufferedIOBase):
+    """
+    Present a block of already buffered business bytes followed by the rest of
+    a reader as one continuous binary stream.
+
+    The first reader has typically decompressed more bytes than it consumed.
+    Those bytes are passed in as ``prefix`` and are yielded before any byte read
+    from ``remainder``, so a successor sees an uninterrupted business stream
+    starting exactly at the handoff point.
+    """
+
+    def __init__(
+        self,
+        prefix: bytes,
+        remainder: BinaryIO,
+        closer: Callable[[], None] | None = None,
+    ):
+        super().__init__()
+        self._head = bytearray(prefix)
+        self._remainder = remainder
+        self._closer = closer
+        self._is_closed = False
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def _read_one(self, size: int) -> bytes:
+        # Prefer read1 to avoid pulling more than requested, but some streams
+        # (e.g. the piped program wrapper) only expose read().
+        read1 = getattr(self._remainder, "read1", None)
+        if read1 is not None:
+            return read1(size)
+        return self._remainder.read(size)
+
+    def read(self, size: int | None = -1) -> bytes:
+        if size is None or size < 0:
+            data = bytes(self._head) + self._remainder.read()
+            self._head.clear()
+            return data
+        if len(self._head) >= size:
+            data = bytes(self._head[:size])
+            del self._head[:size]
+            return data
+        data = bytes(self._head)
+        self._head.clear()
+        if size > len(data):
+            data += self._remainder.read(size - len(data))
+        return data
+
+    def read1(self, size: int | None = -1) -> bytes:
+        # Serve buffered bytes first; once exhausted, forward a single read.
+        if self._head:
+            if size is None or size < 0:
+                data = bytes(self._head)
+                self._head.clear()
+                return data
+            data = bytes(self._head[:size])
+            del self._head[:size]
+            return data
+        if size is None or size < 0:
+            read1 = getattr(self._remainder, "read1", None)
+            return read1() if read1 is not None else self._remainder.read()
+        return self._read_one(size)
+
+    def readinto(self, buffer) -> int:
+        data = self.read(len(buffer))
+        length = len(data)
+        buffer[:length] = data
+        return length
+
+    def readline(self, size: int | None = -1) -> bytes:
+        limit = -1 if size is None else size
+        newline = self._head.find(b"\n")
+        if newline != -1:
+            line_len = newline + 1
+            if limit >= 0:
+                line_len = min(line_len, limit)
+            data = bytes(self._head[:line_len])
+            del self._head[:line_len]
+            return data
+        if limit >= 0 and len(self._head) >= limit:
+            data = bytes(self._head[:limit])
+            del self._head[:limit]
+            return data
+        parts = [bytes(self._head)]
+        self._head.clear()
+        remaining = -1 if limit < 0 else limit - len(parts[0])
+        if remaining != 0:
+            parts.append(self._remainder.readline(remaining))
+        return b"".join(parts)
+
+    def peek(self, size: int | None = None) -> bytes:
+        wanted = BUFFER_SIZE if size is None or size < 0 else max(size, 1)
+        if len(self._head) < wanted:
+            extra = self._read_one(wanted - len(self._head))
+            if extra:
+                self._head.extend(extra)
+        if size is None or size < 0:
+            return bytes(self._head)
+        return bytes(self._head[:size])
+
+    @property
+    def closed(self) -> bool:
+        return self._is_closed
+
+    def close(self) -> None:
+        if self._is_closed:
+            return
+        self._is_closed = True
+        # Taking over: the successor now owns the remainder reader's lifecycle.
+        # ``_closer`` is the reader's original close (the instance close itself
+        # may have been disarmed so the first reader's cleanup cannot tear us
+        # down). Borrow mode still guarantees this never closes the external
+        # handle.
+        try:
+            if self._closer is not None:
+                self._closer()
+            else:
+                self._remainder.close()
+        finally:
+            super().close()
+
+
+@dataclasses.dataclass
+class Handoff:
+    """
+    Result of handing a partially consumed stream from one reader to the next.
+
+    ``stream`` is a binary reader that yields, in order, the read-ahead but not
+    yet consumed business bytes (``pending``) and then the remainder of the
+    underlying stream. Reading it from the handoff point and prepending the
+    bytes already consumed by the first reader reproduces the original input
+    byte for byte.
+
+    When the first reader was opened in text mode, ``encoding``, ``errors`` and
+    ``newline`` capture that configuration so ``open()`` can recreate an
+    equivalent text reader.
+    """
+
+    stream: BinaryIO
+    pending: bytes
+    encoding: str | None = None
+    errors: str | None = None
+    newline: str | None = None
+
+    @property
+    def is_text(self) -> bool:
+        return self.encoding is not None
+
+    def open(self) -> IO:
+        if not self.is_text:
+            return self.stream
+        return io.TextIOWrapper(
+            self.stream,
+            encoding=self.encoding,
+            errors=self.errors,
+            newline=self.newline,
+        )
+
+
+def handoff(reader: IO) -> Handoff:
+    """
+    Hand a partially consumed reader over to a successor.
+
+    The reader may be a binary stream or a :class:`io.TextIOWrapper`. Any
+    business bytes the reader has already buffered (for example inflated by a
+    decompressor) but not yet handed out are captured as ``pending`` and a new
+    binary stream is returned that serves those bytes first and then the rest
+    of the original reader. The handoff works identically for plain and
+    compressed input and never loses or duplicates a byte.
+
+    Binary handoff is fully streaming: only the bytes already held in the
+    reader's buffer are materialized. Text handoff must additionally recover the
+    decoded characters cached inside the :class:`io.TextIOWrapper` (which
+    ``detach`` would otherwise discard), so the remaining text is read once and
+    re-encoded to business bytes.
+
+    Opening the reader in borrow mode (the default for a caller-provided file
+    object) ensures the underlying external handle is not closed here, even if
+    the first reader terminates abnormally.
+    """
+    if isinstance(reader, io.TextIOWrapper):
+        return _handoff_text(reader)
+    stream, pending = _handoff_binary(reader)
+    return Handoff(stream=stream, pending=pending)
+
+
+def _handoff_binary(reader: BinaryIO) -> tuple[BinaryIO, bytes]:
+    # The successor keeps reading from this same reader, so disarm its close:
+    # tearing the first reader down (normal cleanup or an abnormal exit) must
+    # not close the source the successor depends on. The real closer is handed
+    # to the successor so lifecycle ownership is preserved (borrow mode already
+    # guarantees that closer never shuts the external handle).
+    real_close = reader.close
+    reader.close = _noop_close  # type: ignore[method-assign]
+
+    # Peek only reports buffered bytes; it never advances the logical position.
+    # Streams without a buffer (and thus without peek) have no read-ahead surplus
+    # to hand over, so the successor simply continues reading them directly.
+    peek = getattr(reader, "peek", None)
+    if peek is None:
+        pending = b""
+    else:
+        pending = peek(HANDOFF_PEEK_SIZE)
+        if pending:
+            # Consume exactly the captured bytes so the remainder starts after them.
+            drained = reader.read(len(pending))
+            if drained != pending:
+                # Defensive: trust what the reader actually gave up.
+                pending = drained
+    return _ChainedReader(pending, reader, closer=real_close), pending
+
+
+def _handoff_text(reader: io.TextIOWrapper) -> Handoff:
+    encoding = reader.encoding
+    errors = reader.errors
+    # TextIOWrapper does not expose the newline argument used to construct it;
+    # xopen stashes it, otherwise fall back to universal newlines.
+    newline = getattr(reader, "_xopen_newline", None)
+    # Read the remaining decoded text to the end. This also pulls in any
+    # characters the wrapper decoded but had not yet returned; calling detach()
+    # before this point would silently discard that decoded cache.
+    remaining_text = reader.read()
+    # Recover the equivalent business bytes through the same codec.
+    prefix = remaining_text.encode(encoding, errors or "strict")
+    detached = reader.detach()
+    # A detached wrapper raises ValueError on close(). Neutralize it so an
+    # abnormal exit of the first (text) reader stays harmless.
+    reader.close = _noop_close  # type: ignore[method-assign]
+    # The successor takes over the detached binary buffer.
+    real_close = detached.close
+    detached.close = _noop_close  # type: ignore[method-assign]
+    stream = _ChainedReader(prefix, detached, closer=real_close)
+    return Handoff(
+        stream=stream,
+        pending=prefix,
+        encoding=encoding,
+        errors=errors,
+        newline=newline,
+    )
+
+
 def _open_stdin_or_out(mode: str) -> BinaryIO:
     assert mode in ("rb", "ab", "wb")
     std = sys.stdin if mode == "rb" else sys.stdout
@@ -775,6 +1138,7 @@ def xopen(
     errors: str | None = ...,
     newline: str | None = ...,
     format: str | None = ...,
+    closefd: bool | None = ...,
 ) -> io.TextIOWrapper: ...
 
 
@@ -789,6 +1153,7 @@ def xopen(
     errors: None = ...,
     newline: None = ...,
     format: str | None = ...,
+    closefd: bool | None = ...,
 ) -> BinaryIO: ...
 
 
@@ -802,6 +1167,7 @@ def xopen(
     errors: str | None = None,
     newline: str | None = None,
     format: str | None = None,
+    closefd: bool | None = None,
 ) -> IO:
     """
     A replacement for the "open" function that can also read and write
@@ -848,6 +1214,14 @@ def xopen(
     format overrides the autodetection of input and output formats. This can be
     useful when compressed output needs to be written to a file without an
     extension. Possible values are "gz", "xz", "bz2", "zst", "lz4".
+
+    closefd controls ownership of a caller-provided file object. With False the
+    file object is *borrowed*: xopen reads or writes through it but never closes
+    it, so an abnormal reader exit (or an explicit close) leaves the external
+    handle usable for a successor. With True the file object is *taken over* and
+    closed when the returned reader is closed. It defaults to True for file name
+    arguments and False for file objects. Passing closefd=False together with a
+    file name is not possible because there is no external handle to borrow.
     """
     if mode in ("r", "w", "a"):
         mode += "t"  # type: ignore
@@ -855,13 +1229,38 @@ def xopen(
         raise ValueError(f"Mode '{mode}' not supported")
     binary_mode = mode[0] + "b"
     filepath = _filepath_from_path_or_filelike(filename)
+    is_path = isinstance(filename, (str, bytes)) or hasattr(filename, "__fspath__")
+
+    if closefd is None:
+        # File names are taken over; caller-provided file objects are borrowed.
+        closefd = is_path
+    elif not closefd and is_path:
+        raise ValueError(
+            "closefd=False requires a file object, not a file name: "
+            "there is no external handle to borrow"
+        )
 
     # Open non-regular files such as pipes and sockets here to force opening
-    # them once.
+    # them once. These keep their existing lifecycle and are not wrapped.
+    managed = None
     if filename == "-":
         filename = _open_stdin_or_out(binary_mode)
     elif _file_is_a_socket_or_pipe(filename):
         filename = open(filename, binary_mode)  # type: ignore
+    elif not is_path:
+        # A genuine caller-provided file object. Make its ownership explicit by
+        # routing every layer below through a managed stream whose close() only
+        # releases the external handle in take-over mode.
+        if isinstance(filename, io.TextIOWrapper):
+            target = filename.buffer  # type: ignore
+        elif hasattr(filename, "readinto") or hasattr(filename, "write"):
+            target = filename
+        else:
+            raise TypeError(
+                f"Unsupported type for {filename}, {filename.__class__.__name__}."
+            )
+        managed = _ManagedStream(target, own=closefd)
+        filename = managed
 
     if format not in (None, "gz", "xz", "bz2", "zst", "lz4"):
         raise ValueError(
@@ -885,6 +1284,18 @@ def xopen(
     else:
         opened_file, _ = _file_or_path_to_binary_stream(filename, binary_mode)
 
+    if (
+        managed is not None
+        and closefd
+        and detected_format is not None
+    ):
+        # Compressed backends do not close a file object they are given, so in
+        # take-over mode add a wrapper that releases both reader and handle.
+        opened_file = _OwningReader(opened_file, managed)
+
     if "t" in mode:
-        return io.TextIOWrapper(opened_file, encoding, errors, newline)
+        text_reader = io.TextIOWrapper(opened_file, encoding, errors, newline)
+        # Remember the configured newline so a later handoff can recreate it.
+        text_reader._xopen_newline = newline
+        return text_reader
     return opened_file
