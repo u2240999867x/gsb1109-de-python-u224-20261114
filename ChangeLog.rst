@@ -1,6 +1,11 @@
 ﻿EXIF.py Change Log
 ##################
 
+Unreleased
+    * Add ``get_physical_dimensions()`` to compute the physical image size in
+      millimetres per IFD, handling inch/centimetre units, rational
+      resolutions, orientation and partially missing axes.
+
 3.5.1 — 2025-08-23
     * Don't raise exception from decode_maker_note() if strict==False (#243) by Nathan Olson
 

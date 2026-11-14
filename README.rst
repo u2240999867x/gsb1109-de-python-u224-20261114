@@ -125,6 +125,33 @@ Tags are divided into these main categories:
 - ``MakerNote``: Manufacturer specific information. There are no official published references for these tags.
 
 
+Physical Dimensions
+*******************
+
+The physical print size in millimetres is derived from each IFD's pixel count
+(``ImageWidth`` / ``ImageLength``) and resolution (``XResolution`` /
+``YResolution`` / ``ResolutionUnit``). The main image and a reduced-resolution
+preview live in separate IFDs and are evaluated as independent sets: a value
+missing from one IFD is never taken from another one.
+
+.. code-block:: python
+
+    import exifread
+    from exifread import get_physical_dimensions
+
+    with open(file_path, "rb") as file_handle:
+        tags = exifread.process_file(file_handle)
+
+    for ifd_name, size in get_physical_dimensions(tags).items():
+        print(ifd_name, size.width_mm, size.height_mm)
+
+Rational resolutions and both ``Pixels/Inch`` and ``Pixels/Centimeter`` units
+are handled with exact fraction arithmetic. An axis that cannot be computed,
+for example when ``YResolution`` is absent, is returned as ``None`` instead of
+a guessed value. When the orientation swaps the axes (values 5 to 8),
+``width_mm`` and ``height_mm`` are delivered in the actual display order.
+
+
 Processing Options
 ******************
 

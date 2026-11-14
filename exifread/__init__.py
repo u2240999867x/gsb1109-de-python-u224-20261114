@@ -9,6 +9,7 @@ from exifread.core.exceptions import ExifNotFound, InvalidExif
 from exifread.core.exif_header import ExifHeader
 from exifread.core.find_exif import determine_type, get_endian_str
 from exifread.core.xmp import find_xmp_data
+from exifread.dimensions import PhysicalDimensions, get_physical_dimensions
 from exifread.exif_log import get_logger
 from exifread.serialize import convert_types
 from exifread.tags import DEFAULT_STOP_TAG
