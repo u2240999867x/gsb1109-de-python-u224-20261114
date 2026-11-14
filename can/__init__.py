@@ -19,9 +19,11 @@ __all__ = [
     "BLFWriter",
     "BitTiming",
     "BitTimingFd",
+    "BucketOccupancy",
     "BufferedReader",
     "Bus",
     "BusABC",
+    "BusLoadEstimator",
     "BusState",
     "CSVReader",
     "CSVWriter",
@@ -34,6 +36,7 @@ __all__ = [
     "CanutilsLogReader",
     "CanutilsLogWriter",
     "CyclicSendTaskABC",
+    "FrameBitLengths",
     "LimitedDurationCyclicSendTaskABC",
     "Listener",
     "LogReader",
@@ -54,11 +57,14 @@ __all__ = [
     "TRCReader",
     "TRCWriter",
     "ThreadSafeBus",
+    "UndeterminedContribution",
     "bit_timing",
     "broadcastmanager",
     "bus",
+    "bus_load",
     "ctypesutil",
     "detect_available_configs",
+    "estimate_bus_load",
     "exceptions",
     "interface",
     "interfaces",
@@ -88,6 +94,13 @@ from .broadcastmanager import (
     RestartableCyclicTaskABC,
 )
 from .bus import BusABC, BusState, CanProtocol
+from .bus_load import (
+    BucketOccupancy,
+    BusLoadEstimator,
+    FrameBitLengths,
+    UndeterminedContribution,
+    estimate_bus_load,
+)
 from .exceptions import (
     CanError,
     CanInitializationError,

@@ -13,6 +13,7 @@ A form of CAN interface is also required.
    :maxdepth: 2
 
    bus
+   bus_load
    message
    notifier
    file_io
