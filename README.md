@@ -232,6 +232,31 @@ NetworkX has a conversion method for pydot graphs:
 my_networkx_graph = networkx.drawing.nx_pydot.from_pydot(graph)
 ```
 
+### Lineage recompute manifests
+
+If your DOT graph describes field lineage, `pydot.recompute_manifest()`
+compares two versions and reports the datasets that need to be
+recomputed:
+
+```python
+manifest = pydot.recompute_manifest("old.dot", "new.dot")
+
+for group in manifest.groups:
+    print(group.datasets, group.reason_path, group.reasons[0].cause)
+
+# A plain JSON-friendly dictionary is also available:
+payload = manifest.to_dict()
+```
+
+The comparison ignores presentation-only attributes such as `label`,
+`fontname`, `color` and `shape`. It follows effective connection
+changes in both directions: added edges propagate from the new
+version, while removed edges also propagate through the old version.
+Members of a dependency cycle are reported once as a single group,
+and an isolated dataset identical to one in the other version does
+not take a recompute slot. Pass `ignored_attributes=` or
+`attribute_predicate=` to customize which attributes are cosmetic.
+
 ### More help
 
 For more help, see the docstrings of the various pydot objects and

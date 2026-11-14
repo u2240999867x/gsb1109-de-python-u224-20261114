@@ -9,7 +9,12 @@ Pydot versions since 1.4.2 adhere to [PEP 440-style semantic versioning]
 4.0.2 (unreleased)
 ------------------
 
-- Nothing changed yet.
+Added:
+- Added `pydot.recompute_manifest()` for comparing two field-lineage
+  DOT graphs and listing the datasets that must be recomputed.
+  Presentation-only attribute changes are ignored, removed connections
+  propagate through the old graph, cycle members are reported once as
+  a group, and every entry carries a reason path.
 
 
 4.0.1 (2025-06-17)
