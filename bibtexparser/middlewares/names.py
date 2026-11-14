@@ -6,6 +6,8 @@ Much of the code is taken from Blair Bonnetts never merged v0 pull request
 
 import abc
 import dataclasses
+import enum
+from collections.abc import Iterator
 from typing import Literal
 
 from bibtexparser.library import Library
@@ -15,6 +17,12 @@ from bibtexparser.model import Field
 from bibtexparser.model import MiddlewareErrorBlock
 
 from .middleware import BlockMiddleware
+
+# Whitespace characters treated as word separators when scanning name strings.
+_WHITESPACE = set(" \r\n\t")
+# The literal token that BibTeX reserves to abbreviate a list of names
+# (i.e. "and others"). Matching is case-insensitive.
+_OTHERS = "others"
 
 
 class InvalidNameError(ValueError):
@@ -28,6 +36,56 @@ class InvalidNameError(ValueError):
 
     def __reduce__(self):
         return (self.__class__, (self.name, self.reason))
+
+
+class NameType(enum.Enum):
+    """The kind of entity a single name in a name field refers to.
+
+    * ``PERSON``: a personal name, e.g. ``"Donald E. Knuth"`` or
+      ``"Ludwig van Beethoven"``.
+    * ``INSTITUTION``: an organization protected by a pair of curly braces,
+      e.g. ``"{National Institutes of Health}"``. The braces mark it as a
+      single, non-personal name and keep inner "and"/commas/particles intact.
+    * ``OTHERS``: the BibTeX "and others" abbreviation (et al.), which stands
+      in for authors that are not listed explicitly.
+    """
+
+    PERSON = "person"
+    INSTITUTION = "institution"
+    OTHERS = "others"
+
+
+@dataclasses.dataclass
+class ParsedName:
+    """A single name as found in a multi-name field.
+
+    It keeps the name in the order in which it appears in the bibliography
+    while recording what kind of entity it is, so that personal names,
+    brace-protected institutions and the "and others" abbreviation can be told
+    apart.
+
+    :param type: The kind of entity (person, institution or others).
+    :param name: The verbatim name as written in the bibliography, including
+        any protecting braces of an institution.
+    """
+
+    type: NameType
+    name: str
+
+    @property
+    def is_person(self) -> bool:
+        """Whether this name refers to a person."""
+        return self.type == NameType.PERSON
+
+    @property
+    def is_institution(self) -> bool:
+        """Whether this name refers to a brace-protected institution."""
+        return self.type == NameType.INSTITUTION
+
+    @property
+    def is_others(self) -> bool:
+        """Whether this name is the "and others" abbreviation."""
+        return self.type == NameType.OTHERS
 
 
 class _NameTransformerMiddleware(BlockMiddleware, abc.ABC):
@@ -96,6 +154,54 @@ class MergeCoAuthors(_NameTransformerMiddleware):
     def _transform_field_value(self, name: list[str] | str) -> str:
         if isinstance(name, list):
             return " and ".join(name)
+        return name
+
+
+class SeparateNameEntities(_NameTransformerMiddleware):
+    """Middleware splitting a name field into typed entities.
+
+    Unlike :class:`SeparateCoAuthors`, which only splits on the word ``and``,
+    this middleware also distinguishes three kinds of names
+    (see :class:`NameType`): personal names, brace-protected institutions and
+    the ``and others`` abbreviation.
+
+    The original order and spelling is preserved in the returned
+    :class:`ParsedName` objects (institutions keep their protecting braces), so
+    joining their ``name`` attributes reconstructs the original author string;
+    at most one "others" entity is emitted. :class:`MergeNameEntities` writes
+    the same entities back in a canonical persons/institutions/others order.
+    """
+
+    # docstr-coverage: inherited
+    @classmethod
+    def metadata_key(cls) -> str:
+        return "separate_name_entities"
+
+    # docstr-coverage: inherited
+    def _transform_field_value(self, name: str) -> list[ParsedName]:
+        return parse_name_entities(name)
+
+
+class MergeNameEntities(_NameTransformerMiddleware):
+    """Middleware reversing :class:`SeparateNameEntities`.
+
+    It joins the typed entities back into a single BibTeX name string in a
+    canonical order: persons first, then institutions (keeping their braces),
+    and finally a single trailing ``and others`` if the abbreviation is
+    present. The original spelling of every entity is preserved; the original
+    ordering is retained by the :class:`ParsedName` objects of
+    :class:`SeparateNameEntities`.
+    """
+
+    # docstr-coverage: inherited
+    @classmethod
+    def metadata_key(cls) -> str:
+        return "merge_name_entities"
+
+    # docstr-coverage: inherited
+    def _transform_field_value(self, name: list[ParsedName] | str) -> str:
+        if isinstance(name, list):
+            return merge_name_entities(name)
         return name
 
 
@@ -657,3 +763,171 @@ def split_multiple_persons_names(names: str) -> list[str]:
 
     # Extract and return the names.
     return [names[start:end] for start, end in spans]
+
+
+def _iter_name_segments(names: str) -> Iterator[str]:
+    """Yield the top-level segments of a name string, split on ``and``.
+
+    An ``and`` separator is only recognized at brace level zero and surrounded
+    by whitespace, mirroring :func:`split_multiple_persons_names`; an ``and``
+    inside a pair of braces (e.g. ``"{Simon and Schuster}"``) is kept as part
+    of the segment. Escaped characters (``\\x``) are skipped so a backslash
+    never opens or closes a brace.
+    """
+    length = len(names)
+    start = 0
+    i = 0
+    brace_level = 0
+    while i < length:
+        char = names[i]
+        if char == "\\":
+            # Skip the escaped character, if any.
+            i += 2
+            continue
+        if char == "{":
+            brace_level += 1
+            i += 1
+            continue
+        if char == "}":
+            if brace_level > 0:
+                brace_level -= 1
+            i += 1
+            continue
+        if brace_level == 0:
+            separator = _match_and_separator(names, i)
+            # Only split when a name both precedes and follows the separator;
+            # a leading or trailing "and" is kept as part of the adjacent name.
+            if (
+                separator is not None
+                and separator < length
+                and names[start:i].strip()
+            ):
+                yield names[start:i]
+                i = separator
+                start = i
+                continue
+        i += 1
+    yield names[start:]
+
+
+def _match_and_separator(names: str, index: int) -> int | None:
+    """Return the index just past an `` and `` separator starting at ``index``.
+
+    The separator consists of leading whitespace, the word ``and``
+    (case-insensitive) and trailing whitespace, all at brace level zero.
+    Return ``None`` if no separator starts at the given position.
+    """
+    length = len(names)
+    i = index
+    if names[i] not in _WHITESPACE:
+        return None
+    while i < length and names[i] in _WHITESPACE:
+        i += 1
+    if names[i : i + 3].lower() != "and":
+        return None
+    i += 3
+    if i < length and names[i] not in _WHITESPACE:
+        return None
+    while i < length and names[i] in _WHITESPACE:
+        i += 1
+    return i
+
+
+def _is_brace_wrapped(segment: str) -> bool:
+    """Whether the (trimmed) segment is a single brace-balanced braced group."""
+    text = segment.strip()
+    if len(text) < 2 or text[0] != "{" or text[-1] != "}":
+        return False
+    depth = 0
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\":
+            i += 2
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                # The opening brace is only closed again at the very end if the
+                # whole segment forms one outer braced group.
+                return i == len(text) - 1
+        i += 1
+    return False
+
+
+def parse_name_entities(names: str) -> list[ParsedName]:
+    """Split a name field into typed, order-preserving name entities.
+
+    :param names: the raw value of a name field (e.g. an ``author`` field),
+        with the different names separated by the word ``and``.
+    :returns: one :class:`ParsedName` per name, in the original order.
+
+    Three kinds of entities are distinguished (see :class:`NameType`):
+
+    * Personal names, e.g. ``"Donald E. Knuth"`` or ``"Ludwig van Beethoven"``.
+      Particles such as ``von``/``van`` and suffixes such as ``Jr.`` stay part
+      of the single person name; they are not split or duplicated.
+    * Institutions, which are names wrapped in a protecting pair of curly
+      braces, e.g. ``"{World Health Organization}"``. An ``and`` or a
+      same-named token inside the braces remains part of the institution.
+    * The BibTeX abbreviation ``and others`` (et al.). At most one such entity
+      is returned: any further occurrence of the standalone word ``others`` is
+      treated as an ordinary name instead of creating a second marker.
+
+    Brace-protected segments are never broken apart, which avoids the pitfalls
+    of naively splitting on ``and``.
+
+    Examples::
+
+        >>> [(e.type.value, e.name) for e in parse_name_entities("Ludwig van Beethoven and others")]
+        [('person', 'Ludwig van Beethoven'), ('others', 'others')]
+
+        >>> [(e.type.value, e.name) for e in parse_name_entities("{WHO} and Jane Doe")]
+        [('institution', '{WHO}'), ('person', 'Jane Doe')]
+    """
+    if not names or not names.strip():
+        return []
+
+    entities: list[ParsedName] = []
+    others_seen = False
+    for raw_segment in _iter_name_segments(names):
+        segment = raw_segment.strip()
+        if not segment:
+            continue
+        if _is_brace_wrapped(segment):
+            entities.append(ParsedName(NameType.INSTITUTION, segment))
+        elif segment.lower() == _OTHERS and not others_seen:
+            entities.append(ParsedName(NameType.OTHERS, segment))
+            others_seen = True
+        else:
+            entities.append(ParsedName(NameType.PERSON, segment))
+    return entities
+
+
+def merge_name_entities(entities: list[ParsedName]) -> str:
+    """Merge typed name entities into a canonical BibTeX name string.
+
+    :param entities: the entities as produced by :func:`parse_name_entities`.
+    :returns: the names joined with `` and `` in a canonical order.
+
+    The original relative order is kept within each kind of entity, but the
+    kinds are arranged canonically: all persons first, then all institutions
+    (which keep their protecting braces), and finally the single
+    :attr:`NameType.OTHERS` entity written as a trailing ``and others``. A name
+    field can therefore carry at most one "not fully listed" marker, and the
+    institution always occupies the last listed position, just before that
+    marker. Same-named words inside an institution were never split off, so
+    they remain part of it.
+
+    Note that :func:`parse_name_entities` itself keeps the bibliography's
+    original order (so the original signature can always be reconstructed by
+    joining the returned entities in order); only this merge applies the
+    canonical arrangement described above.
+    """
+    persons = [entity for entity in entities if entity.type == NameType.PERSON]
+    institutions = [entity for entity in entities if entity.type == NameType.INSTITUTION]
+    others = [entity for entity in entities if entity.type == NameType.OTHERS][:1]
+    ordered = persons + institutions + others
+    return " and ".join(entity.name for entity in ordered)

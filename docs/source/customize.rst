@@ -100,6 +100,30 @@ Names
 * :mod:`bibtexparser.middlewares.MergeCoAuthors`
 * :mod:`bibtexparser.middlewares.SplitNameParts` (requires SeparateCoAuthors to be applied first)
 * :mod:`bibtexparser.middlewares.MergeNameParts`
+* :mod:`bibtexparser.middlewares.SeparateNameEntities`
+* :mod:`bibtexparser.middlewares.MergeNameEntities`
+
+While :class:`~bibtexparser.middlewares.SeparateCoAuthors` merely splits a name
+field on the word ``and`` into plain strings,
+:class:`~bibtexparser.middlewares.SeparateNameEntities` additionally tells the
+different kinds of names apart. It returns :class:`~bibtexparser.middlewares.ParsedName`
+objects, each tagged with a :class:`~bibtexparser.middlewares.NameType`:
+
+* ``NameType.PERSON`` for personal names (particles such as ``von`` and
+  suffixes such as ``Jr.`` stay part of the person),
+* ``NameType.INSTITUTION`` for names protected by a pair of curly braces,
+  e.g. ``"{World Health Organization}"`` — inner ``and``/commas and same-named
+  words remain part of the institution and are not split,
+* ``NameType.OTHERS`` for the BibTeX ``and others`` abbreviation; at most one
+  such marker is emitted and it is written as a trailing ``and others`` by
+  :class:`~bibtexparser.middlewares.MergeNameEntities`.
+
+:class:`~bibtexparser.middlewares.SeparateNameEntities` keeps the bibliography's
+original order and spelling (including the institution's braces), so the
+original author string can always be reconstructed from the returned objects.
+:class:`~bibtexparser.middlewares.MergeNameEntities` writes a canonical string:
+all persons first, then the institutions, and finally the single ``and others``
+marker if present.
 
 .. _middleware_sorting:
 

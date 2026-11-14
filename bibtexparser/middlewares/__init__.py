@@ -10,9 +10,13 @@ from bibtexparser.middlewares.month import MonthAbbreviationMiddleware
 from bibtexparser.middlewares.month import MonthIntMiddleware
 from bibtexparser.middlewares.month import MonthLongStringMiddleware
 from bibtexparser.middlewares.names import MergeCoAuthors
+from bibtexparser.middlewares.names import MergeNameEntities
 from bibtexparser.middlewares.names import MergeNameParts
 from bibtexparser.middlewares.names import NameParts
+from bibtexparser.middlewares.names import NameType
+from bibtexparser.middlewares.names import ParsedName
 from bibtexparser.middlewares.names import SeparateCoAuthors
+from bibtexparser.middlewares.names import SeparateNameEntities
 from bibtexparser.middlewares.names import SplitNameParts
 from bibtexparser.middlewares.sorting_blocks import SortBlocksByTypeAndKeyMiddleware
 from bibtexparser.middlewares.sorting_blocks import SortBlocksMiddleware
@@ -32,15 +36,19 @@ __all__ = [
     "LatexEncodingMiddleware",
     "LibraryMiddleware",
     "MergeCoAuthors",
+    "MergeNameEntities",
     "MergeNameParts",
     "MonthAbbreviationMiddleware",
     "MonthIntMiddleware",
     "MonthLongStringMiddleware",
     "NameParts",
+    "NameType",
+    "ParsedName",
     "NormalizeFieldKeys",
     "RemoveEnclosingMiddleware",
     "ResolveStringReferencesMiddleware",
     "SeparateCoAuthors",
+    "SeparateNameEntities",
     "SortBlocksByTypeAndKeyMiddleware",
     "SortBlocksMiddleware",
     "SortFieldsAlphabeticallyMiddleware",

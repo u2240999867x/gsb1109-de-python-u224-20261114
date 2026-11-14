@@ -6,10 +6,16 @@ import bibtexparser
 from bibtexparser.library import Library
 from bibtexparser.middlewares.names import InvalidNameError
 from bibtexparser.middlewares.names import MergeCoAuthors
+from bibtexparser.middlewares.names import MergeNameEntities
 from bibtexparser.middlewares.names import MergeNameParts
 from bibtexparser.middlewares.names import NameParts
+from bibtexparser.middlewares.names import NameType
+from bibtexparser.middlewares.names import ParsedName
 from bibtexparser.middlewares.names import SeparateCoAuthors
+from bibtexparser.middlewares.names import SeparateNameEntities
 from bibtexparser.middlewares.names import SplitNameParts
+from bibtexparser.middlewares.names import merge_name_entities
+from bibtexparser.middlewares.names import parse_name_entities
 from bibtexparser.middlewares.names import parse_single_name_into_parts
 from bibtexparser.middlewares.names import split_multiple_persons_names
 from bibtexparser.model import Entry
@@ -1177,3 +1183,375 @@ def test_unenclosed_name_fields_roundtrip(bibtex):
         ],
     )
     assert bibtexparser.write_string(library).strip() == bibtex.strip()
+
+
+def _parsed(*pairs):
+    """Build a list of :class:`ParsedName` from ``(NameType, name)`` pairs."""
+    return [ParsedName(type=type_, name=name) for type_, name in pairs]
+
+
+NAME_ENTITY_TEST_CASES = (
+    pytest.param(
+        "Donald E. Knuth",
+        ((NameType.PERSON, "Donald E. Knuth"),),
+        id="single person",
+    ),
+    pytest.param(
+        "Donald E. Knuth and Leslie Lamport",
+        ((NameType.PERSON, "Donald E. Knuth"), (NameType.PERSON, "Leslie Lamport")),
+        id="two persons",
+    ),
+    pytest.param(
+        "Ludwig van Beethoven and Johann Sebastian Bach",
+        (
+            (NameType.PERSON, "Ludwig van Beethoven"),
+            (NameType.PERSON, "Johann Sebastian Bach"),
+        ),
+        id="von particle stays with the person",
+    ),
+    pytest.param(
+        "Ford, Jr., Henry and Jane Roe",
+        ((NameType.PERSON, "Ford, Jr., Henry"), (NameType.PERSON, "Jane Roe")),
+        id="jr suffix stays with the person",
+    ),
+    pytest.param(
+        "John von Neumann and others",
+        ((NameType.PERSON, "John von Neumann"), (NameType.OTHERS, "others")),
+        id="person and others",
+    ),
+    pytest.param(
+        "Donald E. Knuth AND OTHERS",
+        ((NameType.PERSON, "Donald E. Knuth"), (NameType.OTHERS, "OTHERS")),
+        id="others matching is case insensitive but spelling is kept",
+    ),
+    pytest.param(
+        "{Simon and Schuster}",
+        ((NameType.INSTITUTION, "{Simon and Schuster}"),),
+        id="single institution with inner and",
+    ),
+    pytest.param(
+        "{Simon and Schuster} and John Smith",
+        (
+            (NameType.INSTITUTION, "{Simon and Schuster}"),
+            (NameType.PERSON, "John Smith"),
+        ),
+        id="institution not split on inner and",
+    ),
+    pytest.param(
+        "{National Institutes of Health} and Jane Doe and others",
+        (
+            (NameType.INSTITUTION, "{National Institutes of Health}"),
+            (NameType.PERSON, "Jane Doe"),
+            (NameType.OTHERS, "others"),
+        ),
+        id="institution, person and others keep order",
+    ),
+    pytest.param(
+        "Jane Doe and others and {World Health Organization}",
+        (
+            (NameType.PERSON, "Jane Doe"),
+            (NameType.OTHERS, "others"),
+            (NameType.INSTITUTION, "{World Health Organization}"),
+        ),
+        id="others keeps original position before merging",
+    ),
+    pytest.param(
+        "{World Health Organization} and {World Health Organization}",
+        (
+            (NameType.INSTITUTION, "{World Health Organization}"),
+            (NameType.INSTITUTION, "{World Health Organization}"),
+        ),
+        id="same-named institutions stay distinct institutions",
+    ),
+    pytest.param(
+        "Smith and {Others Foundation} and others",
+        (
+            (NameType.PERSON, "Smith"),
+            (NameType.INSTITUTION, "{Others Foundation}"),
+            (NameType.OTHERS, "others"),
+        ),
+        id="others inside an institution stays part of the institution",
+    ),
+    pytest.param(
+        r"Vign{\'e}, M. and {NTG{} \TeX{} working group}",
+        (
+            (NameType.PERSON, r"Vign{\'e}, M."),
+            (NameType.INSTITUTION, r"{NTG{} \TeX{} working group}"),
+        ),
+        id="latex and nested braces in institution",
+    ),
+    pytest.param(
+        "A and others and B and others",
+        (
+            (NameType.PERSON, "A"),
+            (NameType.OTHERS, "others"),
+            (NameType.PERSON, "B"),
+            (NameType.PERSON, "others"),
+        ),
+        id="only a single others marker",
+    ),
+    pytest.param(
+        "and others",
+        ((NameType.PERSON, "and others"),),
+        id="leading and is not a separator",
+    ),
+    pytest.param(
+        "John Smith and Phil Holden and",
+        ((NameType.PERSON, "John Smith"), (NameType.PERSON, "Phil Holden and")),
+        id="trailing and is not a separator",
+    ),
+    pytest.param(
+        "Harry Fellowes~and D. Drumpf",
+        ((NameType.PERSON, "Harry Fellowes~and D. Drumpf"),),
+        id="tie character prevents splitting",
+    ),
+    pytest.param(
+        "Fake Name an{d brace in an}d and Somebody Else",
+        ((NameType.PERSON, "Fake Name an{d brace in an}d"), (NameType.PERSON, "Somebody Else")),
+        id="and hidden behind braces is not a separator",
+    ),
+    pytest.param(
+        r"Something \and Other",
+        ((NameType.PERSON, r"Something \and Other"),),
+        id="escaped and is not a separator",
+    ),
+)
+
+
+@pytest.mark.parametrize("field_value, expected", NAME_ENTITY_TEST_CASES)
+def test_parse_name_entities(field_value, expected):
+    assert parse_name_entities(field_value) == _parsed(*expected)
+
+
+@pytest.mark.parametrize("field_value, _expected", NAME_ENTITY_TEST_CASES)
+def test_parse_name_entities_preserves_order_and_spelling(field_value, _expected):
+    """The parsed entities keep the bibliography's order and can reconstruct it.
+
+    Joining the entity names reproduces the established (order-preserving)
+    split; brace-protected institutions are kept whole rather than torn apart.
+    """
+    entities = parse_name_entities(field_value)
+    assert [entity.name for entity in entities] == split_multiple_persons_names(
+        field_value
+    )
+
+
+@pytest.mark.parametrize("field_value, _expected", NAME_ENTITY_TEST_CASES)
+def test_merge_name_entities_canonical_order(field_value, _expected):
+    """Merging arranges persons, then institutions, then a single `others`."""
+    entities = parse_name_entities(field_value)
+    persons = [entity for entity in entities if entity.type == NameType.PERSON]
+    institutions = [entity for entity in entities if entity.type == NameType.INSTITUTION]
+    others = [entity for entity in entities if entity.type == NameType.OTHERS][:1]
+    expected = " and ".join(
+        entity.name for entity in persons + institutions + others
+    )
+    assert merge_name_entities(entities) == expected
+
+
+@pytest.mark.parametrize(
+    "field_value",
+    [
+        pytest.param("", id="empty string"),
+        pytest.param("   ", id="spaces only"),
+        pytest.param("\t\n \t", id="mixed whitespace"),
+    ],
+)
+def test_parse_name_entities_whitespace(field_value):
+    assert parse_name_entities(field_value) == []
+    assert merge_name_entities([]) == ""
+
+
+def test_only_one_others_marker_on_merge():
+    """A second standalone `others` is a person, and merge keeps a single marker."""
+    entities = parse_name_entities("A and others and B and others")
+    assert [entity.type for entity in entities] == [
+        NameType.PERSON,
+        NameType.OTHERS,
+        NameType.PERSON,
+        NameType.PERSON,
+    ]
+    # Persons (including the literal second "others") come first; the single
+    # OTHERS marker is written last, so only one "and others" abbreviation shows.
+    assert merge_name_entities(entities) == "A and B and others and others"
+
+
+def test_merge_orders_persons_then_institution_then_others():
+    """Persons precede institutions and the real `and others` always comes last."""
+    entities = _parsed(
+        (NameType.OTHERS, "others"),
+        (NameType.INSTITUTION, "{World Health Organization}"),
+        (NameType.PERSON, "Jane Doe"),
+    )
+    assert merge_name_entities(entities) == "Jane Doe and {World Health Organization} and others"
+
+
+def test_merge_drops_duplicate_others_marker():
+    """Even if several OTHERS entities are passed, only one trailing marker is written."""
+    entities = _parsed(
+        (NameType.PERSON, "A"),
+        (NameType.OTHERS, "others"),
+        (NameType.OTHERS, "others"),
+    )
+    assert merge_name_entities(entities) == "A and others"
+
+
+def test_parsed_name_type_predicates():
+    person = ParsedName(NameType.PERSON, "Jane Doe")
+    institution = ParsedName(NameType.INSTITUTION, "{WHO}")
+    others = ParsedName(NameType.OTHERS, "others")
+
+    assert person.is_person and not person.is_institution and not person.is_others
+    assert institution.is_institution and not institution.is_person
+    assert others.is_others and not others.is_person
+    assert {member.value for member in NameType} == {"person", "institution", "others"}
+
+
+@pytest.mark.parametrize("inplace", [True, False], ids=["inplace", "copy"])
+def test_separate_name_entities_middleware(inplace):
+    input_entry = Entry(
+        start_line=0,
+        raw="irrelevant-for-this-test",
+        entry_type="article",
+        key="articleKey",
+        fields=[
+            Field(start_line=0, key="title", value="A Test and Some More"),
+            Field(
+                start_line=1,
+                key="author",
+                value="{World Health Organization} and Jane Doe and others",
+            ),
+            Field(start_line=2, key="editor", value="C. Editor and D. Editor"),
+        ],
+    )
+    original_copy = deepcopy(input_entry)
+
+    middleware = SeparateNameEntities(allow_inplace_modification=inplace)
+    transformed_library = middleware.transform(Library([input_entry]))
+
+    transformed_entry = transformed_library.entries[0]
+    assert transformed_entry.fields_dict["author"].value == _parsed(
+        (NameType.INSTITUTION, "{World Health Organization}"),
+        (NameType.PERSON, "Jane Doe"),
+        (NameType.OTHERS, "others"),
+    )
+    assert transformed_entry.fields_dict["editor"].value == _parsed(
+        (NameType.PERSON, "C. Editor"),
+        (NameType.PERSON, "D. Editor"),
+    )
+    assert transformed_entry.fields_dict["title"] == original_copy.fields_dict["title"]
+
+    assert_nonfield_entry_attributes_unchanged(original_copy, transformed_entry)
+    assert_inplace_is_respected(inplace, input_entry, transformed_entry)
+
+
+@pytest.mark.parametrize("inplace", [True, False], ids=["inplace", "copy"])
+def test_merge_name_entities_middleware(inplace):
+    input_entry = Entry(
+        start_line=0,
+        raw="irrelevant-for-this-test",
+        entry_type="article",
+        key="articleKey",
+        fields=[
+            Field(
+                start_line=1,
+                key="author",
+                value=_parsed(
+                    (NameType.INSTITUTION, "{World Health Organization}"),
+                    (NameType.PERSON, "Jane Doe"),
+                    (NameType.OTHERS, "others"),
+                ),
+            ),
+        ],
+    )
+
+    middleware = MergeNameEntities(allow_inplace_modification=inplace)
+    transformed_library = middleware.transform(Library([input_entry]))
+
+    transformed_entry = transformed_library.entries[0]
+    # Canonical arrangement: persons, then institutions, then a single others.
+    assert (
+        transformed_entry.fields_dict["author"].value
+        == "Jane Doe and {World Health Organization} and others"
+    )
+    assert_inplace_is_respected(inplace, input_entry, transformed_entry)
+
+
+@pytest.mark.parametrize("inplace", [True, False], ids=["inplace", "copy"])
+def test_separate_and_merge_name_entities(inplace):
+    """Separation keeps the original order; merging applies the canonical order."""
+    author = "{World Health Organization} and Jane Doe and others"
+    input_entry = Entry(
+        start_line=0,
+        raw="irrelevant-for-this-test",
+        entry_type="article",
+        key="articleKey",
+        fields=[Field(start_line=1, key="author", value=author)],
+    )
+
+    library = SeparateNameEntities(allow_inplace_modification=inplace).transform(
+        Library([input_entry])
+    )
+    separated = library.entries[0].fields_dict["author"].value
+    # The parsed entities retain the bibliography's original order and spelling.
+    assert separated == _parsed(
+        (NameType.INSTITUTION, "{World Health Organization}"),
+        (NameType.PERSON, "Jane Doe"),
+        (NameType.OTHERS, "others"),
+    )
+    assert " and ".join(entity.name for entity in separated) == author
+
+    library = MergeNameEntities(allow_inplace_modification=inplace).transform(library)
+    # On merge, persons precede institutions and the single others comes last.
+    assert (
+        library.entries[0].fields_dict["author"].value
+        == "Jane Doe and {World Health Organization} and others"
+    )
+
+
+@pytest.mark.parametrize(
+    "middleware, field_value",
+    [
+        pytest.param(SeparateNameEntities(), "someone and others", id="separate_name_entities"),
+        pytest.param(
+            MergeNameEntities(),
+            _parsed((NameType.PERSON, "someone"), (NameType.OTHERS, "others")),
+            id="merge_name_entities",
+        ),
+    ],
+)
+@pytest.mark.parametrize("enclosing", ["no-enclosing", "{", '"'])
+def test_enclosing_demand_survives_name_entity_transformation(middleware, field_value, enclosing):
+    """Name-entity middlewares change representation, not the enclosing kind."""
+    input_entry = Entry(
+        start_line=0,
+        raw="irrelevant-for-this-test",
+        entry_type="article",
+        key="articleKey",
+        fields=[
+            Field(start_line=1, key="author", value=deepcopy(field_value), enclosing=enclosing)
+        ],
+    )
+
+    transformed_library = middleware.transform(Library([input_entry]))
+    transformed_field = transformed_library.entries[0].fields_dict["author"]
+    assert transformed_field.enclosing == enclosing
+
+
+def test_name_entities_parse_write_roundtrip():
+    """The full parse/write stack preserves persons, institutions and others."""
+    bibtex = (
+        "@article{articleKey,\n"
+        "\tauthor = {Jane Doe and others and {World Health Organization}}\n"
+        "}"
+    )
+    library = bibtexparser.parse_string(
+        bibtex, append_middleware=[SeparateNameEntities(), MergeNameEntities()]
+    )
+    # On merge, the single "others" marker is normalised to the trailing position.
+    assert (
+        bibtexparser.write_string(library).strip()
+        == "@article{articleKey,\n"
+        "\tauthor = {Jane Doe and {World Health Organization} and others}\n"
+        "}"
+    )
