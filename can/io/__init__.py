@@ -22,6 +22,8 @@ __all__ = [
     "MessageSync",
     "Printer",
     "SizedRotatingLogger",
+    "SqliteBatch",
+    "SqliteCheckpoint",
     "SqliteReader",
     "SqliteWriter",
     "TRCFileVersion",
@@ -53,5 +55,5 @@ from .canutils import CanutilsLogReader, CanutilsLogWriter
 from .csv import CSVReader, CSVWriter
 from .mf4 import MF4Reader, MF4Writer
 from .printer import Printer
-from .sqlite import SqliteReader, SqliteWriter
+from .sqlite import SqliteBatch, SqliteCheckpoint, SqliteReader, SqliteWriter
 from .trc import TRCFileVersion, TRCReader, TRCWriter

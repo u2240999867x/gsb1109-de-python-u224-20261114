@@ -41,6 +41,49 @@ SqliteWriter
     :show-inheritance:
     :members:
 
+.. autoclass:: can.SqliteCheckpoint
+    :show-inheritance:
+    :members:
+
+.. autoclass:: can.SqliteBatch
+    :show-inheritance:
+    :members:
+
+Incremental SQLite reads
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+A SQLite log may still be written while it is read.  :meth:`can.SqliteReader.read_new`
+returns a bounded :class:`can.SqliteBatch`, and
+:meth:`can.SqliteReader.commit` advances the saved position only after the
+batch was persisted successfully.  The position is a
+:class:`can.SqliteCheckpoint`; it can be stored as JSON with
+:meth:`can.SqliteCheckpoint.to_dict`.
+
+.. code-block:: python
+
+    import json
+    import can
+
+    reader = can.SqliteReader("night.db")
+    batch = reader.read_new()
+    persist(batch.messages)
+    reader.commit(batch)
+    with open("night-checkpoint.json", "w") as checkpoint_file:
+        json.dump(reader.checkpoint.to_dict(), checkpoint_file)
+
+    # later, possibly in another process
+    with open("night-checkpoint.json") as checkpoint_file:
+        saved = json.load(checkpoint_file)
+    reader = can.SqliteReader("night.db", checkpoint=saved)
+
+Progress is tracked by SQLite ``rowid``, not by message timestamps, so
+duplicated or decreasing timestamps do not cause messages to be skipped.
+Rows appended after a batch started are returned by the next batch.  If the
+database file at the same path is replaced, ``batch.replaced`` is true,
+``batch.previous_checkpoint`` describes the old file, and the new file is
+read from its first row.  Committing a batch after the file changed raises
+``RuntimeError`` instead of advancing past unseen data.  Call
+:meth:`can.SqliteReader.discard` to drop an uncommitted batch explicitly.
 
 Database table format
 ~~~~~~~~~~~~~~~~~~~~~
