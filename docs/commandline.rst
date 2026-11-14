@@ -8,6 +8,12 @@ Radon currently has four commands:
     * :command:`mi`: compute Maintainability Index
     * :command:`hal`: compute Halstead complexity metrics
 
+Additionally, three commands compare snapshots over time:
+
+    * :command:`snapshot`: save a function-level report for later comparison
+    * :command:`diff`: compare two snapshots and explain every continuation
+    * :command:`trend`: track complexity across an ordered series of snapshots
+
 .. note::
     On some systems, such as Windows, the default encoding is not UTF-8. If you
     are using Unicode characters in your Python file and want to analyze it
@@ -533,3 +539,135 @@ Depending on the single cases, a more suitable alternative might be this::
     $ radon hal - < path/to/file.py
 
 Setting the path to "-" will cause Radon to analyze code from stdin.
+
+
+Comparing source snapshots
+--------------------------
+
+A weekly report often compares two revisions of a tree. If a function was
+only renamed or moved, comparing its position would produce one deletion and
+one addition and make the complexity delta meaningless. The snapshot commands
+instead compute a set of explicit **continuation relations** between two
+revisions and only rank complexity changes for relations that have a single,
+defensible predecessor.
+
+Every relation has one of these statuses:
+
+    ============ ===========================================================
+     Status       Meaning
+    ============ ===========================================================
+     grounded     Evidence-backed one-to-one continuation. Only these are
+                  eligible for complexity ranking.
+     split        One source block became several targets. Every target keeps
+                  its source relation, so provenance is not lost.
+     ambiguous    Several continuations are equally plausible. The candidates
+                  are listed and none of them is ranked.
+    ============ ===========================================================
+
+Matching is performed in this order:
+
+1. explicit ``--rename`` and ``--split`` mappings;
+2. same file, same qualified name, and identical structure;
+3. same file and qualified name with an edited body;
+4. a unique structurally identical block (covers a rename and file move);
+5. a unique qualified name under a different file (covers a move);
+6. a conservative split, when several new functions are assembled solely
+   from statements of one old function.
+
+Two identical wrapper functions are never assigned arbitrarily: if both could
+be the continuation, the relation is reported as ambiguous and excluded from
+ranking. Structural fingerprints ignore local identifiers, parameter names,
+and line numbers, but retain operators, constants, attribute names, and
+control flow.
+
+The :command:`snapshot` command
+-------------------------------
+
+.. program:: snapshot
+
+Save a function-level report as JSON. Saved reports are much smaller than
+source trees and can be kept as weekly artifacts:
+
+::
+
+    $ radon snapshot src w42.json
+    $ git checkout w43
+    $ radon snapshot src w43.json
+    $ radon diff w42.json w43.json
+
+The input may also be produced by :command:`cc` with ``--json``.
+
+The :command:`diff` command
+---------------------------
+
+.. program:: diff
+
+.. option:: -r, --rename <str>
+
+   Declare an explicit continuation, as ``old=new``. Repeat the option for
+   several mappings. References may be ``path::qualname`` or a bare qualified
+   name. The value may contain several comma-separated targets, which declares
+   a split.
+
+   ::
+
+       $ radon diff w42 w43 -r 'core.py::old_name=utils.py::new_name'
+
+.. option:: --split <str>
+
+   Declare an explicit one-to-many split, as ``old=first,second``.
+
+   ::
+
+       $ radon diff w42 w43 --split 'pipeline.process=steps.add_all,steps.double'
+
+.. option:: -j, --json
+
+   Emit the full report as JSON: every relation, every evidence string, the
+   ambiguity groups, the split groups, the ranked deltas, and the trend
+   segments.
+
+.. option:: --only-changed
+
+   Rank only continuations whose complexity changed.
+
+.. option:: --no-zero
+
+   Hide continuations whose complexity did not change.
+
+.. option:: -O, --output-file <str>
+
+   Save output to the specified output file.
+
+The :command:`trend` command
+----------------------------
+
+.. program:: trend
+
+Give the snapshots in chronological order. A curve is drawn only across
+grounded one-to-one continuations. When a split or an ambiguous predecessor
+breaks the chain, the two sides are reported as separate lineages with the
+reason; the tool never draws a line through an unsupported match.
+
+::
+
+    $ radon trend w40 w41 w42 w43 -l 'week 40,week 41,week 42,week 43'
+
+.. option:: -l, --labels <str>
+
+   Comma-separated labels for the snapshots, useful in JSON reports.
+
+.. option:: -j, --json
+
+   Emit each trend with its separate segments and break records.
+
+Trend statuses are:
+
+    ============== =========================================================
+     Status         Meaning
+    ============== =========================================================
+     connected      A contiguous curve spanning the whole series.
+     partial        Contiguous, but starts after or ends before a break.
+     broken         The curve contains a gap.
+     isolated       A single point with no connected neighbour.
+    ============== =========================================================

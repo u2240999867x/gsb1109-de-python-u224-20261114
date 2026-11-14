@@ -26,6 +26,7 @@ from radon.cli.harvest import (
     MIHarvester,
     RawHarvester,
 )
+from radon.cli.snapshot import SnapshotHarvester, TrendHarvester
 
 if sys.version_info[0] == 2:
     import ConfigParser as configparser
@@ -317,6 +318,117 @@ def hal(
     harvester = HCHarvester(paths, config)
     with outstream(output_file) as stream:
         log_result(harvester, json=json, xml=False, md=False, stream=stream)
+
+
+@program.command
+@program.arg('old')
+@program.arg('new')
+def diff(
+    old,
+    new,
+    rename=[],
+    split=[],
+    json=False,
+    only_changed=False,
+    no_zero=False,
+    no_assert=_cfg.get_value('no_assert', bool, False),
+    output_file=_cfg.get_value('output_file', str, None),
+):
+    '''Compare two source snapshots and report function continuity.
+
+    Each snapshot can be a directory, a Python file, or a JSON report saved
+    with `radon snapshot` or produced by `radon cc --json`. Functions that
+    were only renamed or moved are reported as continuations instead of a
+    deletion plus an addition.
+
+    :param old: The older snapshot (directory, file, or JSON report).
+    :param new: The newer snapshot (directory, file, or JSON report).
+    :param -r, --rename <str>: Explicit rename mapping, as old=new. Repeat
+        the option for several mappings; separate several targets with a
+        comma. References can be ``path::qualname`` or a bare qualified name.
+    :param --split <str>: Explicit split mapping, as old=new1,new2. Repeat
+        the option for several splits.
+    :param -j, --json: Format results in JSON.
+    :param --only-changed: Only rank continuations whose complexity changed.
+    :param --no-zero: Hide unchanged complexity deltas.
+    :param --no-assert: Do not count assert statements when computing
+        complexity.
+    :param -O, --output-file <str>: The output file (default to stdout).
+    '''
+    config = Config(
+        rename=rename,
+        split=split,
+        only_changed=only_changed,
+        show_zero=not no_zero,
+        no_assert=no_assert,
+    )
+    harvester = SnapshotHarvester(old, new, config)
+    with outstream(output_file) as stream:
+        log_result(harvester, json=json, stream=stream)
+
+
+@program.command
+@program.arg('snapshots', nargs='+')
+def trend(
+    snapshots,
+    rename=[],
+    split=[],
+    labels=None,
+    json=False,
+    no_assert=_cfg.get_value('no_assert', bool, False),
+    output_file=_cfg.get_value('output_file', str, None),
+):
+    '''Track function complexity across an ordered series of snapshots.
+
+    Each snapshot can be a directory, a Python file, or a JSON report. A
+    curve is only drawn across grounded one-to-one continuations; when a
+    function is split or its predecessor is ambiguous the trend is broken
+    and the reason is reported.
+
+    :param snapshots: The snapshots in chronological order.
+    :param -r, --rename <str>: Explicit rename mapping, as old=new.
+    :param --split <str>: Explicit split mapping, as old=new1,new2.
+    :param -l, --labels <str>: Comma-separated labels for the snapshots.
+    :param -j, --json: Format results in JSON.
+    :param --no-assert: Do not count assert statements when computing
+        complexity.
+    :param -O, --output-file <str>: The output file (default to stdout).
+    '''
+    label_list = None
+    if labels:
+        label_list = [label.strip() for label in labels.split(',')]
+        if len(label_list) != len(snapshots):
+            raise ValueError(
+                'expected {0} labels, got {1}'.format(
+                    len(snapshots), len(label_list)
+                )
+            )
+    config = Config(rename=rename, split=split, no_assert=no_assert)
+    harvester = TrendHarvester(snapshots, config, labels=label_list)
+    with outstream(output_file) as stream:
+        log_result(harvester, json=json, stream=stream)
+
+
+@program.command
+@program.arg('path')
+@program.arg('output_file')
+def snapshot(
+    path,
+    output_file,
+    no_assert=_cfg.get_value('no_assert', bool, False),
+):
+    '''Save a snapshot of every function and its complexity as JSON.
+
+    The result can later be passed to `radon diff` or `radon trend`.
+
+    :param path: A directory or Python file to analyze.
+    :param output_file: The JSON file to write.
+    :param --no-assert: Do not count assert statements when computing
+        complexity.
+    '''
+    from radon.snapshot import Snapshot
+
+    Snapshot.from_path(path, no_assert=no_assert).save(output_file)
 
 
 class Config(object):

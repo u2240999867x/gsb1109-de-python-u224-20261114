@@ -141,6 +141,39 @@ Visitors
 .. autoclass:: HalsteadVisitor
 
 
+Snapshot continuity
+-------------------
+
+.. py:module:: radon.snapshot
+    :synopsis: Continuation relations between source snapshots
+
+.. autoclass:: Snapshot
+
+   .. automethod:: from_sources
+
+   .. automethod:: from_code
+
+   .. automethod:: from_directory
+
+   .. automethod:: from_path
+
+   .. automethod:: from_json_data
+
+.. autoclass:: SnapshotComparison
+   :members:
+
+.. autoclass:: Relation
+   :members:
+
+.. autofunction:: compare_snapshots
+
+.. autofunction:: rank_complexity_changes
+
+.. autofunction:: build_trends
+
+.. autofunction:: track_functions
+
+
 Harvesters
 ----------
 
@@ -157,3 +190,14 @@ Harvesters
 .. autoclass:: RawHarvester
 
 .. autoclass:: MIHarvester
+
+
+Snapshot harvesters
+-------------------
+
+.. py:module:: radon.cli.snapshot
+    :synopsis: Harvesters backing the diff and trend commands
+
+.. autoclass:: SnapshotHarvester
+
+.. autoclass:: TrendHarvester
