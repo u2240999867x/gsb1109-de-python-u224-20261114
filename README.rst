@@ -530,6 +530,53 @@ are always blocked, even if not using an allowlist:
 If you really really need that - you can make your own wrappers and overrides.
 But I advise against it.
 
+Money and Currency
+------------------
+
+When an expression works with money, ordinary numbers are not enough: the
+currency has to travel with every intermediate value, and rounding must happen
+only at a declared settlement boundary rather than after each step.
+
+``money(amount, currency, places=2)`` builds a tagged amount from a
+``Decimal``, an ``int`` or decimal text.  Floats are rejected because they
+cannot represent decimal fractions exactly:
+
+.. code-block:: pycon
+
+    >>> from decimal import Decimal
+    >>> from simpleeval import SimpleEval, money
+    >>> s = SimpleEval()
+    >>> s.names['price'] = money('1.2345', 'USD')
+    >>> s.names['qty'] = 3
+    >>> s.eval('qty * price')
+    Money(Decimal('3.7035'), Currency('USD', places=2))
+
+Multiplying a quantity by a price yields a ``Money`` value, and the currency
+propagates through discounts and aggregations without any intermediate
+rounding.  Adding or subtracting two amounts of different currencies with no
+exchange rate raises ``CurrencyMismatch``; convert one side explicitly first.
+
+Rounding is an explicit settlement boundary.  ``settle()`` rounds half-up to
+the currency's scale (two places by default, zero for currencies like JPY)
+and leaves the unrounded value untouched, so results stay reconcilable with
+their source lines.  Three half-cent lines therefore settle differently
+depending on where the boundary is declared:
+
+.. code-block:: pycon
+
+    >>> from simpleeval import EvalWithCompoundTypes
+    >>> e = EvalWithCompoundTypes()
+    >>> e.names['lines'] = [money('0.005', 'USD'),
+    ...                     money(Decimal('0.005'), 'USD'),
+    ...                     money(1, 'USD') * Decimal('0.005')]
+    >>> e.eval("money_sum([settle(line) for line in lines])")
+    Money(Decimal('0.03'), Currency('USD', places=2))
+    >>> e.eval("settle(money_sum(lines))")
+    Money(Decimal('0.02'), Currency('USD', places=2))
+
+``money_sum(values)`` sums a sequence while keeping full precision, refusing
+to mix currencies; on plain numbers it uses exact ``Decimal`` arithmetic.
+
 Other...
 --------
 

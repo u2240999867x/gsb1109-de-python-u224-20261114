@@ -115,6 +115,7 @@ import os
 import sys
 import types
 import warnings
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from random import random
 
 ########################################
@@ -390,6 +391,10 @@ class MultipleExpressions(UserWarning):
     """Only the first expression parsed will be used"""
 
 
+class CurrencyMismatch(InvalidExpression):
+    """Two amounts of different currencies were combined without an exchange rate."""
+
+
 # Sentinal used during attr access
 _ATTR_NOT_FOUND = object()
 
@@ -436,6 +441,213 @@ class ModuleWrapper:
             raise FeatureNotAvailable(f"Access to '{name}' is not allowed on this wrapped module")
 
         return getattr(self._module, name)
+
+
+########################################
+# Money: currency-tagged amounts with explicit settlement boundaries
+#
+# A Money value keeps an exact Decimal amount and the currency it is
+# denominated in.  The currency propagates through every intermediate
+# calculation, and rounding happens only at an explicit settlement
+# boundary (Money.settle / the settle() expression function), never as a
+# side effect of ordinary arithmetic.
+
+
+def _to_decimal(value):
+    """Coerce a Decimal, int or decimal text into an exact Decimal.
+
+    Floats are rejected on purpose: they cannot represent decimal
+    fractions exactly, which would silently corrupt money.
+    """
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, bool):
+        raise TypeError("boolean is not a valid monetary amount")
+    if isinstance(value, int):
+        return Decimal(value)
+    if isinstance(value, str):
+        try:
+            return Decimal(value.strip())
+        except InvalidOperation:
+            raise TypeError(f"cannot parse {value!r} as a decimal amount")
+    raise TypeError(f"cannot interpret {type(value).__name__} as a decimal amount")
+
+
+class Currency:
+    """A currency and the scale at which its amounts are settled.
+
+    Places is the number of fractional digits kept at a settlement
+    boundary (2 for cents, 0 for zero-decimal currencies, ...).
+    """
+
+    def __init__(self, code, places=2):
+        self.code = str(code)
+        self.places = int(places)
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, Currency) and self.code == other.code and self.places == other.places
+        )
+
+    def __hash__(self):
+        return hash((self.code, self.places))
+
+    def __repr__(self):
+        return f"Currency({self.code!r}, places={self.places})"
+
+
+class Money:
+    """An exact amount in a single currency.
+
+    Arithmetic never rounds: intermediate values keep their full
+    precision so that rounding at different settlement boundaries stays
+    reconcilable with the original lines.
+    """
+
+    def __init__(self, amount, currency):
+        if not isinstance(currency, Currency):
+            raise TypeError("currency must be a Currency instance")
+        self.amount = _to_decimal(amount)
+        self.currency = currency
+
+    def _same_currency(self, other, operation):
+        if not isinstance(other, Money) or other.currency != self.currency:
+            raise CurrencyMismatch(
+                f"cannot {operation} amounts of different currencies without an exchange rate"
+            )
+
+    def __add__(self, other):
+        self._same_currency(other, "add")
+        return Money(self.amount + other.amount, self.currency)
+
+    def __sub__(self, other):
+        self._same_currency(other, "subtract")
+        return Money(self.amount - other.amount, self.currency)
+
+    def __mul__(self, other):
+        if isinstance(other, Money):
+            raise TypeError("multiplying two monetary amounts is not supported")
+        return Money(self.amount * _to_decimal(other), self.currency)
+
+    __rmul__ = __mul__
+
+    def __truediv__(self, other):
+        if isinstance(other, Money):
+            raise TypeError("dividing two monetary amounts is not supported")
+        return Money(self.amount / _to_decimal(other), self.currency)
+
+    def __neg__(self):
+        return Money(-self.amount, self.currency)
+
+    def __pos__(self):
+        return Money(self.amount, self.currency)
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, Money)
+            and self.currency == other.currency
+            and self.amount == other.amount
+        )
+
+    def __lt__(self, other):
+        self._same_currency(other, "compare")
+        return self.amount < other.amount
+
+    def __le__(self, other):
+        self._same_currency(other, "compare")
+        return self.amount <= other.amount
+
+    def __gt__(self, other):
+        self._same_currency(other, "compare")
+        return self.amount > other.amount
+
+    def __ge__(self, other):
+        self._same_currency(other, "compare")
+        return self.amount >= other.amount
+
+    def __hash__(self):
+        return hash((self.amount, self.currency))
+
+    def __repr__(self):
+        return f"Money({self.amount!r}, {self.currency!r})"
+
+    def settle(self, places=None):
+        """Settlement boundary: round to the currency's fractional scale.
+
+        Returns a new Money value; the unrounded value is left untouched
+        so the result can always be reconciled back to its source lines.
+        """
+        if places is None:
+            places = self.currency.places
+        quantum = Decimal(1).scaleb(-int(places))
+        return Money(self.amount.quantize(quantum, rounding=ROUND_HALF_UP), self.currency)
+
+
+def money(amount, currency, places=2):
+    """Build a Money amount from a Decimal, int or decimal text."""
+    if isinstance(currency, Currency):
+        return Money(amount, currency)
+    return Money(amount, Currency(currency, places))
+
+
+def settle(value, places=None):
+    """Round an amount at a declared settlement boundary.
+
+    Accepts a Money value, or a plain Decimal/int/text amount (which is
+    rounded without a currency tag).
+    """
+    if isinstance(value, Money):
+        return value.settle(places)
+    if places is None:
+        places = 2
+    quantum = Decimal(1).scaleb(-int(places))
+    return _to_decimal(value).quantize(quantum, rounding=ROUND_HALF_UP)
+
+
+def money_mult(a, b):
+    """Quantity times price: an amount only arises when one side is Money.
+
+    Two plain numbers keep their ordinary (exact or float) arithmetic,
+    while a Money times a quantity returns a Money in the same currency.
+    """
+    if isinstance(a, Money) or isinstance(b, Money):
+        return a * b
+    return safe_mult(a, b)
+
+
+def money_add(a, b):
+    """Addition that refuses to merge two currencies without a rate."""
+    if isinstance(a, Money) or isinstance(b, Money):
+        return a + b
+    return safe_add(a, b)
+
+
+def money_sub(a, b):
+    """Subtraction that refuses to mix two currencies without a rate."""
+    if isinstance(a, Money) or isinstance(b, Money):
+        return a - b
+    return op.sub(a, b)
+
+
+def money_sum(values):
+    """Sum a sequence, keeping exact intermediate precision.
+
+    Money values must all share one currency; an untagged number cannot
+    be folded into a monetary total. Plain-number sums use exact
+    Decimal arithmetic.
+    """
+    items = list(values)
+    if not items:
+        return 0
+    if all(isinstance(value, Money) for value in items):
+        total = items[0]
+        for value in items[1:]:
+            total = total + value
+        return total
+    total = Decimal(0)
+    for value in items:
+        total += _to_decimal(value)
+    return total
 
 
 ########################################
@@ -493,9 +705,9 @@ def safe_lshift(a, b):  # pylint: disable=invalid-name
 # Defaults for the evaluator:
 
 DEFAULT_OPERATORS = {
-    ast.Add: safe_add,
-    ast.Sub: op.sub,
-    ast.Mult: safe_mult,
+    ast.Add: money_add,
+    ast.Sub: money_sub,
+    ast.Mult: money_mult,
     ast.Div: op.truediv,
     ast.FloorDiv: op.floordiv,
     ast.RShift: safe_rshift,
@@ -527,6 +739,11 @@ DEFAULT_FUNCTIONS = {
     "int": int,
     "float": float,
     "str": str,
+    "Decimal": Decimal,
+    "Currency": Currency,
+    "money": money,
+    "settle": settle,
+    "money_sum": money_sum,
 }
 
 DEFAULT_NAMES = {"True": True, "False": False, "None": None}
