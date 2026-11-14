@@ -7,6 +7,12 @@
 * Improve escaping in Markdown writer. This avoids some cases where source
   documents could inject arbitrary HTML into the converted document.
 
+* Record a section header index on the document. Each section resolves its
+  first, odd and even page headers from explicit header references, empty
+  header parts and previous-section inheritance, honouring the document-level
+  even and odd header setting and each section's title page setting. Headers
+  are registered only; they are not paginated and do not affect conversion.
+
 # 1.12.2
 
 * Avoid excessive backtracking when parsing an unterminated string with many

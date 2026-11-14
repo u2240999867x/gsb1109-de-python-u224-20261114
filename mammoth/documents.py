@@ -14,6 +14,7 @@ class HasChildren(Element):
 class Document(HasChildren):
     notes = cobble.field()
     comments = cobble.field()
+    sections = cobble.field()
 
 @cobble.data
 class Paragraph(HasChildren):
@@ -119,12 +120,14 @@ class Image(Element):
     open = cobble.field()
 
 
-def document(children, notes=None, comments=None):
+def document(children, notes=None, comments=None, sections=None):
     if notes is None:
         notes = Notes({})
     if comments is None:
         comments = []
-    return Document(children, notes, comments=comments)
+    if sections is None:
+        sections = header_index([])
+    return Document(children, notes, comments=comments, sections=sections)
 
 def paragraph(children, style_id=None, style_name=None, numbering=None, alignment=None, indent=None):
     if indent is None:
@@ -284,3 +287,116 @@ comment_reference = CommentReference
 
 def element_visitor(args):
     return cobble.visitor(Element, args=args)
+
+
+# --- Section header index -------------------------------------------------
+#
+# The header index only records the headers declared by each section's
+# w:sectPr; it does not paginate the document. Every resolved header slot can
+# be traced back to the declaration that supplies it, or to a part that was
+# referenced but is missing from the package.
+
+HEADER_SLOT_FIRST = "first"
+HEADER_SLOT_ODD = "odd"
+HEADER_SLOT_EVEN = "even"
+HEADER_SLOTS = (HEADER_SLOT_FIRST, HEADER_SLOT_ODD, HEADER_SLOT_EVEN)
+
+# A section explicitly references a header part.
+HEADER_ORIGIN_EXPLICIT = "explicit"
+# A section explicitly references a header part that contains no content.
+HEADER_ORIGIN_EMPTY = "empty"
+# A section has no declaration of its own and inherits an earlier section.
+HEADER_ORIGIN_INHERITED = "inherited"
+# A headerReference exists but the referenced part cannot be found.
+HEADER_ORIGIN_MISSING = "missing"
+# The slot is switched off (even/odd or first-page toggle), so no header applies.
+HEADER_ORIGIN_DISABLED = "disabled"
+# The slot is active but neither this section nor any previous section declares it.
+HEADER_ORIGIN_NONE = "none"
+
+
+@cobble.data
+class HeaderPart(object):
+    part_name = cobble.field()
+    is_empty = cobble.field()
+    text = cobble.field()
+
+
+@cobble.data
+class HeaderSource(object):
+    section_index = cobble.field()
+    slot = cobble.field()
+    enabled = cobble.field()
+    origin = cobble.field()
+    source_section_index = cobble.field()
+    relationship_id = cobble.field()
+    part_name = cobble.field()
+    text = cobble.field()
+    detail = cobble.field()
+
+
+@cobble.data
+class SectionHeaders(object):
+    section_index = cobble.field()
+    title_page = cobble.field()
+    first = cobble.field()
+    odd = cobble.field()
+    even = cobble.field()
+
+    def find_slot(self, slot):
+        return getattr(self, slot)
+
+
+@cobble.data
+class HeaderIndex(object):
+    even_and_odd_headers = cobble.field()
+    sections = cobble.field()
+
+    def find_section(self, section_index):
+        return self.sections[section_index]
+
+
+def header_part(part_name, is_empty, text):
+    return HeaderPart(part_name=part_name, is_empty=bool(is_empty), text=text)
+
+
+def header_source(
+        section_index,
+        slot,
+        enabled,
+        origin,
+        detail,
+        source_section_index=None,
+        relationship_id=None,
+        part_name=None,
+        text=None):
+    if text is None:
+        text = ""
+    return HeaderSource(
+        section_index=section_index,
+        slot=slot,
+        enabled=bool(enabled),
+        origin=origin,
+        source_section_index=source_section_index,
+        relationship_id=relationship_id,
+        part_name=part_name,
+        text=text,
+        detail=detail,
+    )
+
+
+def section_headers(section_index, title_page, first, odd, even):
+    return SectionHeaders(
+        section_index=section_index,
+        title_page=bool(title_page),
+        first=first,
+        odd=odd,
+        even=even,
+    )
+
+
+def header_index(sections, even_and_odd_headers=False):
+    return HeaderIndex(
+        even_and_odd_headers=bool(even_and_odd_headers),
+        sections=sections,
+    )

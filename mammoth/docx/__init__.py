@@ -11,7 +11,10 @@ from .numbering_xml import read_numbering_xml_element, Numbering
 from .styles_xml import read_styles_xml_element, Styles
 from .notes_xml import read_endnotes_xml_element, read_footnotes_xml_element
 from .comments_xml import read_comments_xml_element
+from .settings_xml import read_settings_xml_element
+from .headers_xml import read_header_xml_element
 from .files import Files
+from .uris import uri_to_zip_entry_name
 from . import body_xml, office_xml
 from ..zips import open_zip
 
@@ -29,11 +32,30 @@ def read(fileobj, external_file_access=False):
         external_file_access=external_file_access,
     )
 
+    document_relationships = _read_relationships(
+        zip_file,
+        _find_relationships_path_for(part_paths.main_document),
+    )
+    even_and_odd_headers = _read_settings(read_part_with_body, part_paths)
+    read_header_part = _header_part_reader(
+        zip_file,
+        read_part_with_body,
+        document_relationships,
+        os.path.dirname(part_paths.main_document),
+    )
+
     return results.combine([
         _read_notes(read_part_with_body, part_paths),
         _read_comments(read_part_with_body, part_paths),
     ]).bind(lambda referents:
-        _read_document(zip_file, read_part_with_body, notes=referents[0], comments=referents[1], part_paths=part_paths)
+        _read_document(
+            read_part_with_body,
+            notes=referents[0],
+            comments=referents[1],
+            part_paths=part_paths,
+            even_and_odd_headers=even_and_odd_headers,
+            read_header_part=read_header_part,
+        )
     )
 
 
@@ -44,6 +66,7 @@ class _PartPaths(object):
     endnotes = cobble.field()
     footnotes = cobble.field()
     numbering = cobble.field()
+    settings = cobble.field()
     styles = cobble.field()
 
 
@@ -71,6 +94,7 @@ def _find_part_paths(zip_file):
         endnotes=find("endnotes"),
         footnotes=find("footnotes"),
         numbering=find("numbering"),
+        settings=find("settings"),
         styles=find("styles"),
     )
 
@@ -124,13 +148,54 @@ def _read_comments(read_part_with_body, part_paths):
     )
 
 
-def _read_document(zip_file, read_part_with_body, notes, comments, part_paths):
+def _read_settings(read_part_with_body, part_paths):
+    return read_part_with_body(
+        part_paths.settings,
+        lambda root, body_reader: read_settings_xml_element(root),
+        default=False,
+    )
+
+
+def _header_part_reader(zip_file, read_part_with_body, document_relationships, document_dir):
+    def read_header_part(relationship_id):
+        try:
+            target = document_relationships.find_target_by_relationship_id(relationship_id)
+        except KeyError:
+            return results.Result(None, [results.warning(
+                "Header reference with relationship ID {0} does not have a matching relationship".format(
+                    relationship_id,
+                )
+            )])
+
+        part_name = uri_to_zip_entry_name(document_dir, target)
+        if not zip_file.exists(part_name):
+            return results.Result(None, [results.warning(
+                "Header part '{0}' was referenced but is missing from the package".format(part_name)
+            )])
+
+        return read_part_with_body(
+            part_name,
+            lambda root, body_reader: read_header_xml_element(root, body_reader, part_name),
+        )
+
+    return read_header_part
+
+
+def _read_document(
+        read_part_with_body,
+        notes,
+        comments,
+        part_paths,
+        even_and_odd_headers,
+        read_header_part):
     return read_part_with_body(
         part_paths.main_document,
         partial(
             read_document_xml_element,
             notes=notes,
             comments=comments,
+            even_and_odd_headers=even_and_odd_headers,
+            read_header_part=read_header_part,
         ),
     )
 
