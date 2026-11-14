@@ -38,6 +38,16 @@ BaseClass = collections.namedtuple(
     ],
 )
 
+# Mergeable Halstead data. Counts are plain integers while the seen sets use
+# the same de-duplication keys as a single traversal: operator names are shared
+# program-wide vocabulary, operands are keyed by ``(context, token)`` so that
+# same-named variables in different functions stay distinct. Merging batches
+# therefore only requires count additions and set unions.
+HalsteadMetrics = collections.namedtuple(
+    'HalsteadMetrics',
+    ['operators', 'operands', 'operators_seen', 'operands_seen'],
+)
+
 
 def code2ast(source):
     '''Convert a string object into an AST object.
@@ -368,6 +378,24 @@ class HalsteadVisitor(CodeVisitor):
     def distinct_operands(self):
         '''The number of distinct operands.'''
         return len(self.operands_seen)
+
+    def to_metrics(self):
+        '''Return the collected data as a mergeable
+        :class:`~radon.visitors.HalsteadMetrics` object.
+
+        ``operators_seen`` holds operator names, since operator vocabulary is
+        shared by the whole program, while ``operands_seen`` holds
+        ``(context, token)`` pairs, so that same-named operands living in
+        different scopes are never conflated. Batches analyzed independently
+        can therefore be merged with plain set unions without changing the
+        de-duplication semantics of a single traversal.
+        '''
+        return HalsteadMetrics(
+            self.operators,
+            self.operands,
+            set(self.operators_seen),
+            set(self.operands_seen),
+        )
 
     def dispatch(meth):
         '''This decorator does all the hard work needed for every node.

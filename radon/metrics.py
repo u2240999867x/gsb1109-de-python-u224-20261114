@@ -7,7 +7,7 @@ import collections
 import math
 
 from radon.raw import analyze
-from radon.visitors import ComplexityVisitor, HalsteadVisitor
+from radon.visitors import ComplexityVisitor, HalsteadVisitor, HalsteadMetrics
 
 # Halstead metrics
 HalsteadReport = collections.namedtuple(
@@ -66,10 +66,46 @@ def h_visit_ast(ast_node):
     return Halstead(total, functions)
 
 
-def halstead_visitor_report(visitor):
-    """Return a HalsteadReport from a HalsteadVisitor instance."""
-    h1, h2 = visitor.distinct_operators, visitor.distinct_operands
-    N1, N2 = visitor.operators, visitor.operands
+def merge_halstead_metrics(*batches):
+    '''Merge Halstead data collected from independent traversals (for example
+    separate files or batches of files) into a single
+    :class:`~radon.visitors.HalsteadMetrics`.
+
+    Total operator/operand counts are summed, since every occurrence counts
+    towards the length. Vocabulary is de-duplicated with the explicit scope
+    rules of a single traversal:
+
+        * operators are shared program vocabulary, so equal operator names
+          (e.g. ``Add`` appearing in both batches) count only once;
+        * operands carry their ``(context, token)`` scope key, so the same
+          name in two different functions stays distinct, while the same
+          operand in the same scope is only counted once.
+
+    Merging in any order yields the same result, and merging all batches of a
+    code base is equivalent to traversing it in a single pass.
+    '''
+    metrics = HalsteadMetrics(0, 0, set(), set())
+    for batch in batches:
+        metrics = HalsteadMetrics(
+            metrics.operators + batch.operators,
+            metrics.operands + batch.operands,
+            metrics.operators_seen | batch.operators_seen,
+            metrics.operands_seen | batch.operands_seen,
+        )
+    return metrics
+
+
+def halstead_metrics_report(metrics):
+    '''Return a HalsteadReport computed from merged
+    :class:`~radon.visitors.HalsteadMetrics` data.
+
+    This is the batch-friendly counterpart of
+    :func:`halstead_visitor_report`: the vocabulary (``h1``, ``h2``) is
+    derived from the de-duplicated sets while the length (``N1``, ``N2``)
+    comes from the accumulated occurrence counts.
+    '''
+    h1, h2 = len(metrics.operators_seen), len(metrics.operands_seen)
+    N1, N2 = metrics.operators, metrics.operands
     h = h1 + h2
     N = N1 + N2
     if h1 and h2:
@@ -93,6 +129,11 @@ def halstead_visitor_report(visitor):
         effort / 18.0,
         volume / 3000.0,
     )
+
+
+def halstead_visitor_report(visitor):
+    """Return a HalsteadReport from a HalsteadVisitor instance."""
+    return halstead_metrics_report(visitor.to_metrics())
 
 
 def mi_compute(halstead_volume, complexity, sloc, comments):

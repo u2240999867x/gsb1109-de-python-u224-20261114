@@ -121,6 +121,10 @@ Other metrics
 
 .. autofunction:: h_visit_ast
 
+.. autofunction:: merge_halstead_metrics
+
+.. autofunction:: halstead_metrics_report
+
 .. autofunction:: mi_visit
 
 .. autofunction:: mi_rank
@@ -139,6 +143,8 @@ Visitors
 .. autoclass:: ComplexityVisitor
 
 .. autoclass:: HalsteadVisitor
+
+.. autoclass:: HalsteadMetrics
 
 
 Harvesters

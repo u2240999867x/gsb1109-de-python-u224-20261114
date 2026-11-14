@@ -1,3 +1,14 @@
+Unreleased
+----------
+
+- Add mergeable Halstead data (`HalsteadVisitor.to_metrics`,
+  `HalsteadMetrics`), `merge_halstead_metrics` and
+  `halstead_metrics_report` so per-file batches can be merged into a
+  package-level Halstead report. Operators are de-duplicated as shared
+  program vocabulary while operands keep their `(scope, token)` key, so
+  same-named locals in different functions stay distinct and merging any
+  partition of a file list matches a single full traversal.
+
 6.0.1 (Mar 26, 2023)
 --------------------
 
