@@ -465,7 +465,6 @@ def test_keywords_with_ports() -> None:
     assert n.get_port() == ":edge"
 
 
-@pytest.mark.xfail(reason="The port logic is a broken mess")
 def test_broken_port_handling() -> None:
     n = pydot.Node("edge:12", color="red")
     e = pydot.Edge(n, "strict:node")
@@ -711,7 +710,6 @@ def test_quote_id_with_embedded_double_quote() -> None:
         """)
 
 
-@pytest.mark.xfail(reason="We mishandle two-colon (id:port:compass) endpoints")
 def test_edge_with_port_and_compass() -> None:
     g = pydot.Graph("G")
     e = pydot.Edge("foo.bar:5:sw", '"red/blue":4:"nw"')
@@ -1026,3 +1024,100 @@ def test_object_cloning(objdict: dict[str, T.Any]) -> None:
     newg = pydot.Dot("G")
     assert newg != g
     assert newg != h
+
+
+def test_endpoint_key_is_hashable_composite_key() -> None:
+    key = pydot.Endpoint('"sales:archive"', "id", "sw")
+    assert key == ('"sales:archive"', "id", "sw")
+    assert hash(key) == hash(('"sales:archive"', "id", "sw"))
+    assert key.to_dict() == {
+        "node": '"sales:archive"',
+        "port": "id",
+        "compass": "sw",
+    }
+
+
+def test_endpoint_from_reference_keeps_quoted_colon_intact() -> None:
+    assert pydot.endpoint_from_ref('"sales:archive":id') == pydot.Endpoint(
+        '"sales:archive"', "id", None
+    )
+    assert pydot.endpoint_from_ref('"sales:archive"') == pydot.Endpoint(
+        '"sales:archive"', None, None
+    )
+    assert pydot.endpoint_from_ref('"a\\"b":p:sw') == pydot.Endpoint(
+        '"a\\"b"', "p", "sw"
+    )
+
+
+def test_endpoint_accepts_dict_and_roundtrips_to_string() -> None:
+    key = pydot.Endpoint.from_string('"sales:archive":id')
+    assert key.to_string() == '"sales:archive":id'
+    assert pydot.endpoint_from_mapping(key.to_dict()) == key
+
+
+def test_edge_from_endpoint_keys() -> None:
+    src = pydot.Endpoint('"sales:archive"', "id")
+    dst = pydot.Endpoint('"sales:archive"')
+    edge = pydot.Edge(src, dst)
+    assert edge.get_source_endpoint() == src
+    assert edge.get_destination_endpoint() == dst
+    assert edge.to_string() == '"sales:archive":id -- "sales:archive";'
+
+
+def test_graph_exposes_endpoint_index_for_storage() -> None:
+    (graph,) = pydot.graph_from_dot_data(
+        'digraph G { "sales:archive":id -> "sales:archive"; }'
+    )
+    index = graph.get_endpoint_index()
+    assert index == [
+        {
+            "source": {
+                "node": '"sales:archive"',
+                "port": "id",
+                "compass": None,
+            },
+            "destination": {
+                "node": '"sales:archive"',
+                "port": None,
+                "compass": None,
+            },
+            "attributes": {},
+        }
+    ]
+
+
+def test_endpoint_index_from_dot_data_endpoint() -> None:
+    src = (
+        "digraph G {\n"
+        '  "sales:archive":id -> "sales:archive";\n'
+        '  "a\\"b":id:sw -> sink:in;\n'
+        "}\n"
+    )
+    records = pydot.endpoint_index_from_dot_data(src)
+    assert records == [
+        {
+            "source": {
+                "node": '"sales:archive"',
+                "port": "id",
+                "compass": None,
+            },
+            "destination": {
+                "node": '"sales:archive"',
+                "port": None,
+                "compass": None,
+            },
+            "attributes": {},
+        },
+        {
+            "source": {"node": '"a\\"b"', "port": "id", "compass": "sw"},
+            "destination": {"node": "sink", "port": "in", "compass": None},
+            "attributes": {},
+        },
+    ]
+    # Plain Python values, safe to serialize for storage.
+    assert all(
+        isinstance(value, (str, type(None)))
+        for record in records
+        for endpoint in (record["source"], record["destination"])
+        for value in endpoint.values()
+    )

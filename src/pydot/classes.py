@@ -7,7 +7,201 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, Union
+from typing import Any, Dict, NamedTuple, Union
+
+
+class Endpoint(NamedTuple):
+    """Structured reference to a node, optionally with port and compass.
+
+    A DOT node reference such as ``"sales:archive":id:sw`` consists of
+    up to three colon-separated parts.  Splitting such a reference
+    naively on ``:`` breaks quoted IDs whose names contain a colon.  An
+    ``Endpoint`` keeps the logical node name, port and compass separately,
+    with ``None`` marking a part that was not specified.
+
+    As a named tuple it is hashable and can be used directly as a
+    composite database key.  ``to_dict()`` returns a plain, JSON-safe
+    mapping of the same fields.
+    """
+
+    name: str
+    port: str | None = None
+    compass: str | None = None
+
+    @property
+    def node(self) -> str:
+        """Alias for :attr:`name`."""
+        return self.name
+
+    @property
+    def id(self) -> str:
+        """Alias for :attr:`name`."""
+        return self.name
+
+    @property
+    def compass_point(self) -> str | None:
+        """Alias for :attr:`compass`."""
+        return self.compass
+
+    @property
+    def position(self) -> str | None:
+        """Alias for :attr:`compass` (the Graphviz compass position)."""
+        return self.compass
+
+    @property
+    def is_default(self) -> bool:
+        """Whether this reference is a bare node with no port or compass."""
+        return self.port is None and self.compass is None
+
+    @property
+    def default(self) -> bool:
+        """Alias for :attr:`is_default`."""
+        return self.is_default
+
+    @property
+    def default_state(self) -> bool:
+        """Alias for :attr:`is_default`."""
+        return self.is_default
+
+    def to_dict(self) -> dict[str, str | None]:
+        """Return the endpoint key as a plain mapping."""
+        return {
+            "node": self.name,
+            "port": self.port,
+            "compass": self.compass,
+        }
+
+    def as_dict(self) -> dict[str, str | None]:
+        """Alias for :meth:`to_dict`."""
+        return self.to_dict()
+
+    def key(self) -> tuple[str, str | None, str | None]:
+        """Return the composite key as a plain tuple."""
+        return (self.name, self.port, self.compass)
+
+    @property
+    def unquoted_name(self) -> str:
+        """The node part with its surrounding DOT quotes removed."""
+        return unquote_id(self.name)
+
+    @property
+    def bare_name(self) -> str:
+        """Alias for :attr:`unquoted_name`."""
+        return self.unquoted_name
+
+    @classmethod
+    def from_string(cls, ref: str) -> Endpoint:
+        """Parse a DOT node reference into an endpoint key."""
+        return endpoint_from_ref(ref)
+
+    @classmethod
+    def parse(cls, ref: str) -> Endpoint:
+        """Alias for :meth:`from_string`."""
+        return cls.from_string(ref)
+
+    def to_string(self) -> str:
+        """Return the endpoint key as a DOT node reference."""
+        from pydot.core import format_node_ref
+
+        return format_node_ref(self.name, self.port, self.compass)
+
+
+def unquote_id(value: str) -> str:
+    """Remove the enclosing DOT quotes from an ID, if present.
+
+    Only the two escapes that pydot itself emits inside quoted IDs are
+    decoded, so ordinary backslashes in names are left untouched.
+    """
+    if len(value) < 2 or not (value.startswith('"') and value.endswith('"')):
+        return value
+    body = value[1:-1]
+    out = []
+    i = 0
+    while i < len(body):
+        char = body[i]
+        if char == "\\" and i + 1 < len(body):
+            nxt = body[i + 1]
+            if nxt in ('"', "\\"):
+                out.append(nxt)
+                i += 2
+                continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+# Descriptive aliases for callers that prefer a more explicit name.
+EndpointKey = Endpoint
+StructuredEndpoint = Endpoint
+
+
+def split_node_ref(ref: str) -> tuple[str, str | None, str | None]:
+    """Split a DOT node reference into node, port and compass parts.
+
+    Only colons outside double-quoted strings and HTML-like IDs act as
+    separators, so a quoted node name such as ``"sales:archive"`` is kept
+    intact.  Backslash-escaped quotes inside a quoted ID do not end the
+    quoted span.  Missing parts are returned as ``None``.
+
+    At most two separators are consumed: the first separates the node
+    from the port, the second separates the port from the compass point.
+    Any further colons remain part of the compass value.  A colon at the
+    start or end of a component is not treated as a separator, matching
+    DOT's tolerance for names such as ``a:``.
+    """
+    parts: list[str] = []
+    start = 0
+    in_quote = False
+    html_depth = 0
+    i = 0
+    n = len(ref)
+
+    while i < n:
+        char = ref[i]
+        if in_quote:
+            if char == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if char == '"':
+                in_quote = False
+        elif html_depth:
+            if char == "<":
+                html_depth += 1
+            elif char == ">":
+                html_depth -= 1
+        elif char == '"':
+            in_quote = True
+        elif char == "<":
+            html_depth = 1
+        elif char == ":" and len(parts) < 2:
+            # Do not split on a leading colon, nor on a colon that would
+            # leave an empty component (e.g. a trailing colon in a name).
+            if i > start and i + 1 < n and ref[i + 1] != ":":
+                parts.append(ref[start:i])
+                start = i + 1
+        i += 1
+
+    parts.append(ref[start:])
+
+    node = parts[0]
+    port = parts[1] if len(parts) > 1 else None
+    compass = parts[2] if len(parts) > 2 else None
+    return node, port or None, compass or None
+
+
+def endpoint_key(ref: str) -> Endpoint:
+    """Build an :class:`Endpoint` key from a DOT node reference."""
+    return endpoint_from_ref(ref)
+
+
+# Alias spelling the same operation as a verb for callers that prefer it.
+parse_endpoint = endpoint_key
+
+
+def endpoint_from_ref(ref: str) -> Endpoint:
+    """Build an :class:`Endpoint` key from a DOT node reference."""
+    node, port, compass = split_node_ref(ref)
+    return Endpoint(node, port, compass)
 
 
 class FrozenDict(dict):  # type: ignore

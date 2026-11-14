@@ -11,6 +11,7 @@ import textwrap
 import pyparsing as pp
 import pytest
 
+import pydot
 from pydot import dot_parser
 from pydot.dot_parser import HTML, GraphParser
 
@@ -366,3 +367,100 @@ def test_comments_are_discarded() -> None:
         'b -- "/* node */ c";\n'
         "}\n"
     )
+
+
+def test_quoted_node_name_with_colon_is_not_split() -> None:
+    """A quoted ID containing ':' stays one node, not an implicit chain."""
+    src = 'digraph { "sales:archive":id -> consumer; }'
+    (graph,) = dot_parser.parse_dot_data(src)
+    (edge,) = graph.get_edges()
+    assert edge.get_source() == '"sales:archive":id'
+    assert edge.get_source_endpoint() == pydot.Endpoint(
+        '"sales:archive"', "id", None
+    )
+    assert edge.get_destination_endpoint() == pydot.Endpoint("consumer")
+
+
+def test_endpoint_key_preserves_node_port_and_compass() -> None:
+    src = 'digraph { "sales:archive":id:nw -> sink:in:sw [weight=2]; }'
+    (graph,) = dot_parser.parse_dot_data(src)
+    (edge,) = graph.get_edges()
+    source, destination = edge.get_endpoints()
+    assert source == pydot.Endpoint('"sales:archive"', "id", "nw")
+    assert destination == pydot.Endpoint("sink", "in", "sw")
+    assert source.is_default is False
+    assert pydot.Endpoint("sink").is_default is True
+
+
+def test_endpoint_key_defaults_are_none() -> None:
+    (graph,) = dot_parser.parse_dot_data('digraph { "sales:archive" -> b; }')
+    (edge,) = graph.get_edges()
+    key = edge.get_source_endpoint()
+    assert isinstance(key, pydot.Endpoint)
+    assert (key.name, key.port, key.compass) == ('"sales:archive"', None, None)
+    assert key.to_dict() == {
+        "node": '"sales:archive"',
+        "port": None,
+        "compass": None,
+    }
+
+
+def test_escaped_quote_name_coexists_with_bare_node() -> None:
+    """Escaped-quote IDs and the same name without a port are distinct."""
+    src = (
+        "digraph {\n"
+        '  "a\\"b":id -> x;\n'
+        '  "a\\"b" -> y;\n'
+        '  "sales:archive":id -> z;\n'
+        '  "sales:archive" -> w;\n'
+        "}\n"
+    )
+    (graph,) = dot_parser.parse_dot_data(src)
+    sources = [edge.get_source_endpoint() for edge in graph.get_edges()]
+    assert sources == [
+        pydot.Endpoint('"a\\"b"', "id", None),
+        pydot.Endpoint('"a\\"b"', None, None),
+        pydot.Endpoint('"sales:archive"', "id", None),
+        pydot.Endpoint('"sales:archive"', None, None),
+    ]
+
+
+def test_endpoint_keys_survive_dot_roundtrip() -> None:
+    src = (
+        "digraph {\n"
+        '  "a\\"b":id:sw -> "a\\"b";\n'
+        '  "sales:archive":id -> "sales:archive";\n'
+        '  "sales:archive":id:ne -> other:n;\n'
+        "}\n"
+    )
+    (graph,) = dot_parser.parse_dot_data(src)
+    first = graph.get_edge_endpoint_keys()
+    rendered = graph.to_string()
+    (roundtrip,) = dot_parser.parse_dot_data(rendered)
+    assert roundtrip.get_edge_endpoint_keys() == first
+    assert roundtrip.to_string() == rendered
+
+
+def test_node_endpoint_key_preserves_parts() -> None:
+    (graph,) = dot_parser.parse_dot_data(
+        'digraph { "sales:archive":id:sw; "sales:archive"; }'
+    )
+    keys = [node.get_endpoint() for node in graph.get_nodes()]
+    assert keys == [
+        pydot.Endpoint('"sales:archive"', "id", "sw"),
+        pydot.Endpoint('"sales:archive"', None, None),
+    ]
+    assert [node.to_string() for node in graph.get_nodes()] == [
+        '"sales:archive":id:sw;',
+        '"sales:archive";',
+    ]
+
+
+def test_bare_endpoint_name_with_colon_is_quoted_on_output() -> None:
+    """A node key with a colon and no port must stay one node."""
+    edge = pydot.Edge(pydot.Endpoint("sales:archive"), "sink")
+    assert edge.to_string() == '"sales:archive" -- sink;'
+    (graph,) = dot_parser.parse_dot_data(f"digraph {{ {edge.to_string()} }}")
+    key = graph.get_edges()[0].get_source_endpoint()
+    assert key.name == '"sales:archive"'
+    assert key.port is None

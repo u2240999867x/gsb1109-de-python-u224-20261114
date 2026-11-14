@@ -24,7 +24,21 @@ if TYPE_CHECKING:
 
 import pydot
 from pydot._vendor import tempfile
-from pydot.classes import AttributeDict, EdgeEndpoint, FrozenDict
+from pydot.classes import (
+    AttributeDict,
+    EdgeEndpoint,
+    Endpoint,
+    EndpointKey,  # noqa: F401  (re-exported)
+    FrozenDict,
+    StructuredEndpoint,  # noqa: F401  (re-exported)
+    endpoint_from_ref,
+    split_node_ref,
+    unquote_id,  # noqa: F401  (re-exported)
+)
+
+# Re-export the endpoint helpers from the package's main module.
+endpoint_key = endpoint_from_ref
+parse_endpoint = endpoint_from_ref
 
 _logger = logging.getLogger(__name__)
 _logger.debug("pydot core module initializing")
@@ -402,6 +416,67 @@ def quote_attr_if_necessary(s: str) -> str:
     return make_quoted(s)
 
 
+def format_node_ref(
+    node: str,
+    port: str | None = None,
+    compass: str | None = None,
+    unquoted_keywords: Sequence[str] | None = None,
+) -> str:
+    """Format a node reference from its separate parts.
+
+    ``port`` and ``compass`` may be stored with a leading colon for
+    backwards compatibility; it is normalized away here.  Each part is
+    quoted independently, so a quoted node name containing a colon is
+    never split again.
+
+    An unquoted node name containing a colon is quoted as a whole.
+    Without that, the colon would be read back as a port separator.
+    """
+    if (
+        isinstance(node, str)
+        and ":" in node
+        and not re_dbl_quoted.match(node)
+        and not re_html.match(node)
+    ):
+        node_text = make_quoted(node)
+    else:
+        node_text = quote_id_if_necessary(
+            node, unquoted_keywords=unquoted_keywords
+        )
+    text = node_text
+    if port is not None:
+        port_value = port[1:] if port.startswith(":") else port
+        text += ":" + quote_id_if_necessary(port_value)
+        if compass is not None:
+            compass_value = compass[1:] if compass.startswith(":") else compass
+            text += ":" + quote_id_if_necessary(compass_value)
+    return text
+
+
+def endpoint_from_mapping(mapping: dict[str, Any]) -> Endpoint:
+    """Build an :class:`Endpoint` from a mapping with name/port/compass.
+
+    Both ``name`` and ``node`` are accepted for the node part so callers
+    can feed keys from either storage shape back into pydot.
+    """
+    if "name" in mapping:
+        name = mapping["name"]
+    else:
+        name = mapping["node"]
+    return Endpoint(
+        str(name),
+        None if mapping.get("port") is None else str(mapping["port"]),
+        None if mapping.get("compass") is None else str(mapping["compass"]),
+    )
+
+
+def endpoint_to_node_ref(endpoint: Endpoint | EdgeEndpoint) -> EdgeEndpoint:
+    """Convert a structured endpoint (or plain value) to a node reference."""
+    if isinstance(endpoint, Endpoint):
+        return format_node_ref(endpoint.name, endpoint.port, endpoint.compass)
+    return endpoint
+
+
 def graph_from_dot_data(s: str) -> list[Dot] | None:
     """Load graphs from DOT description in string `s`.
 
@@ -438,6 +513,39 @@ def graph_from_dot_file(
         s = f.read()
     graphs = graph_from_dot_data(s)
     return graphs
+
+
+def endpoint_index_from_dot_data(s: str) -> list[dict[str, Any]] | None:
+    """Parse DOT text and return storage-ready edge endpoint records.
+
+    Each record has ``source``, ``destination`` and ``attributes`` keys.
+    Source and destination are plain mappings with ``node``, ``port`` and
+    ``compass`` values.  Parts absent from the DOT input are ``None``.
+    This is the direct, no-further-conversion form of
+    :meth:`Graph.get_endpoint_index` for callers that only need to read
+    a DOT string and persist its relationships.
+
+    @return: One record per edge, or `None` if parsing failed.
+    """
+    graphs = graph_from_dot_data(s)
+    if graphs is None:
+        return None
+    records: list[dict[str, Any]] = []
+    for graph in graphs:
+        records.extend(graph.get_endpoint_index())
+    return records
+
+
+def endpoint_index_from_dot_file(
+    path: str | bytes, encoding: str | None = None
+) -> list[dict[str, Any]] | None:
+    """Parse a DOT file and return storage-ready edge endpoint records.
+
+    See :func:`endpoint_index_from_dot_data`.
+    """
+    with open(path, encoding=encoding) as f:
+        s = f.read()
+    return endpoint_index_from_dot_data(s)
 
 
 def graph_from_edges(
@@ -689,7 +797,7 @@ class Node(Common):
 
     def __init__(
         self,
-        name: str = "",
+        name: str | Endpoint = "",
         obj_dict: AttributeDict | None = None,
         **attrs: Any,
     ) -> None:
@@ -702,19 +810,20 @@ class Node(Common):
             self.obj_dict["parent_graph"] = None
             self.obj_dict["sequence"] = None
 
-            # Remove the compass point
-            #
-            port = None
-            if isinstance(name, str) and not name.startswith('"'):
-                idx = name.find(":")
-                if idx > 0 and idx + 1 < len(name):
-                    name, port = name[:idx], name[idx:]
+            if isinstance(name, Endpoint):
+                port = name.port
+                compass = name.compass
+                node = name.name
+            else:
+                if not isinstance(name, str):
+                    name = str(name)
+                # Split node, port and compass without breaking quoted
+                # names that themselves contain colons.
+                node, port, compass = split_node_ref(name)
 
-            if isinstance(name, int):
-                name = str(name)
-
-            self.obj_dict["name"] = name
-            self.obj_dict["port"] = port
+            self.obj_dict["name"] = node
+            self.obj_dict["port"] = f":{port}" if port is not None else None
+            self.obj_dict["compass"] = compass
 
     def __str__(self) -> str:
         return self.to_string()
@@ -731,6 +840,55 @@ class Node(Common):
         """Get the node's port."""
         return self.obj_dict["port"]  # type: ignore
 
+    def get_compass(self) -> str | None:
+        """Get the node's compass point, if any."""
+        return self.obj_dict.get("compass")
+
+    def get_endpoint(self) -> Endpoint:
+        """Get the node reference as a structured endpoint key.
+
+        The returned :class:`Endpoint` holds the bare node name, the port
+        and the compass point separately.  Parts that were not given are
+        ``None``, so the default (port-less, compass-less) state is
+        distinguishable from an explicit value.
+        """
+        port = self.get_port()
+        if port is not None and port.startswith(":"):
+            port = port[1:]
+        compass = self.get_compass()
+        if compass is not None and compass.startswith(":"):
+            compass = compass[1:]
+        return Endpoint(self.get_name(), port, compass)
+
+    @property
+    def endpoint(self) -> Endpoint:
+        """The node reference as a structured endpoint key."""
+        return self.get_endpoint()
+
+    def get_endpoint_key(self) -> Endpoint:
+        """Alias for :meth:`get_endpoint`."""
+        return self.get_endpoint()
+
+    def get_reference(self) -> str:
+        """Get the full node reference, including port and compass.
+
+        The parts are joined with ``:`` without any additional quoting;
+        a quoted node name keeps its own quotes, so a name such as
+        ``"sales:archive"`` is not split into implicit nodes.
+        """
+        text = str(self.obj_dict["name"])
+        port = self.obj_dict.get("port")
+        if port is not None:
+            port_value = port[1:] if port.startswith(":") else port
+            text += ":" + port_value
+            compass = self.obj_dict.get("compass")
+            if compass is not None:
+                compass_value = (
+                    compass[1:] if compass.startswith(":") else compass
+                )
+                text += ":" + compass_value
+        return text
+
     def add_style(self, style: str) -> None:
         styles = self.obj_dict["attributes"].get("style", None)
         if not styles and style:
@@ -745,8 +903,11 @@ class Node(Common):
         """Return string representation of node in DOT language."""
         indent_str = self.get_indent(indent, indent_level)
 
-        node = quote_id_if_necessary(
-            self.obj_dict["name"], unquoted_keywords=("graph", "node", "edge")
+        node = format_node_ref(
+            self.obj_dict["name"],
+            self.obj_dict.get("port"),
+            self.obj_dict.get("compass"),
+            unquoted_keywords=("graph", "node", "edge"),
         )
 
         # No point in having default nodes that don't set any attributes...
@@ -801,7 +962,11 @@ class Edge(Common):
     ) -> None:
         super().__init__(obj_dict)
         if obj_dict is None:
-            if isinstance(src, (list, tuple)):
+            _src: Any
+            _dst: Any
+            if isinstance(src, Endpoint):
+                _src, _dst = src, dst
+            elif isinstance(src, (list, tuple)):
                 _src, _dst = src[0:2]
             elif src is None or dst is None:
                 raise pydot.Error(
@@ -815,20 +980,27 @@ class Edge(Common):
             ep0: EdgeEndpoint
             ep1: EdgeEndpoint
 
-            if isinstance(_src, (Node, Subgraph, Cluster)):
+            if isinstance(_src, Node):
+                ep0 = _src.get_reference()
+            elif isinstance(_src, (Subgraph, Cluster)):
                 ep0 = str(_src.get_name())
             elif isinstance(_src, (FrozenDict, int, float)):
                 ep0 = _src
+            elif isinstance(_src, Endpoint):
+                ep0 = endpoint_to_node_ref(_src)
             else:
                 ep0 = str(_src)
 
-            if isinstance(_dst, (Node, Subgraph, Cluster)):
+            if isinstance(_dst, Node):
+                ep1 = _dst.get_reference()
+            elif isinstance(_dst, (Subgraph, Cluster)):
                 ep1 = str(_dst.get_name())
             elif isinstance(_dst, (FrozenDict, int, float)):
                 ep1 = _dst
+            elif isinstance(_dst, Endpoint):
+                ep1 = endpoint_to_node_ref(_dst)
             else:
                 ep1 = str(_dst)
-
             points = (ep0, ep1)
 
             self.obj_dict["points"] = points
@@ -853,6 +1025,32 @@ class Edge(Common):
     def get_destination(self) -> EdgeEndpoint:
         """Get the edge's destination endpoint."""
         return self._get_endpoint(1)
+
+    def get_source_endpoint(self) -> Endpoint | FrozenDict:
+        """Get the edge's source as a structured endpoint key.
+
+        String endpoints are split into node, port and compass without
+        breaking quoted IDs that contain colons.  Subgraph endpoints are
+        returned unchanged as their frozen object dictionary.
+        """
+        return self._endpoint_key(self.get_source())
+
+    def get_destination_endpoint(self) -> Endpoint | FrozenDict:
+        """Get the edge's destination as a structured endpoint key."""
+        return self._endpoint_key(self.get_destination())
+
+    def get_endpoints(
+        self,
+    ) -> tuple[Endpoint | FrozenDict, Endpoint | FrozenDict]:
+        """Get both edge endpoints as structured keys."""
+        return (self.get_source_endpoint(), self.get_destination_endpoint())
+
+    def _endpoint_key(self, ep: EdgeEndpoint) -> Endpoint | FrozenDict:
+        if isinstance(ep, FrozenDict):
+            return ep
+        if isinstance(ep, Endpoint):
+            return ep
+        return endpoint_from_ref(str(ep))
 
     def __hash__(self) -> int:
         return hash(hash(self.get_source()) + hash(self.get_destination()))
@@ -895,31 +1093,18 @@ class Edge(Common):
         return False
 
     def parse_node_ref(self, node_ref: EdgeEndpoint) -> EdgeEndpoint:
+        """Quote the parts of a node reference that need quoting.
+
+        The reference is split with a quote-aware scanner, so a quoted
+        node name containing colons (including the ``sales:archive``
+        style IDs used by field-lineage tools) is treated as one node
+        rather than being re-split into several implicit nodes.
+        """
         if not isinstance(node_ref, str):
             return node_ref
 
-        if node_ref.startswith('"') and node_ref.endswith('"'):
-            return node_ref
-
-        node_port_idx = node_ref.rfind(":")
-
-        if (
-            node_port_idx > 0
-            and node_ref[0] == '"'
-            and node_ref[node_port_idx - 1] == '"'
-        ):
-            return node_ref
-
-        if node_port_idx > 0:
-            a = node_ref[:node_port_idx]
-            b = node_ref[(node_port_idx + 1) :]
-
-            node = quote_id_if_necessary(a)
-            node += ":" + quote_id_if_necessary(b)
-
-            return node
-
-        return quote_id_if_necessary(node_ref)
+        name, port, compass = split_node_ref(node_ref)
+        return format_node_ref(name, port, compass)
 
     def to_string(self, indent: Any = "", indent_level: int = 1) -> str:
         """Return string representation of edge in DOT language."""
@@ -1374,6 +1559,57 @@ class Graph(Common):
 
     def get_edges(self) -> list[Edge]:
         return self.get_edge_list()
+
+    def get_edge_endpoint_keys(
+        self,
+    ) -> list[tuple[Endpoint | FrozenDict, Endpoint | FrozenDict]]:
+        """Get the structured endpoint keys of every edge in the graph.
+
+        Each pair is ``(source_key, destination_key)``.  For string
+        endpoints the keys are :class:`Endpoint` values whose node, port
+        and compass parts are kept separate; subgraph endpoints are
+        returned as their frozen object dictionaries.
+
+        The keys are plain, hashable values intended to be stored and
+        looked up directly, for example in a database of field-lineage
+        relationships.
+        """
+        return [edge.get_endpoints() for edge in self.get_edge_list()]
+
+    def get_endpoint_keys(
+        self,
+    ) -> list[tuple[Endpoint | FrozenDict, Endpoint | FrozenDict]]:
+        """Alias for :meth:`get_edge_endpoint_keys`."""
+        return self.get_edge_endpoint_keys()
+
+    def get_endpoint_index(
+        self,
+    ) -> list[dict[str, object]]:
+        """Get edge endpoint keys as plain JSON-safe dictionaries.
+
+        Returns one record per edge with ``source``, ``destination`` and
+        ``attributes`` entries, suitable for persisting to a database
+        without any further conversion.
+        """
+        records: list[dict[str, object]] = []
+        for edge in self.get_edge_list():
+            source, destination = edge.get_endpoints()
+            records.append(
+                {
+                    "source": self._endpoint_record(source),
+                    "destination": self._endpoint_record(destination),
+                    "attributes": dict(edge.get_attributes()),
+                }
+            )
+        return records
+
+    @staticmethod
+    def _endpoint_record(
+        endpoint: Endpoint | FrozenDict,
+    ) -> dict[str, Any]:
+        if isinstance(endpoint, Endpoint):
+            return endpoint.to_dict()
+        return {"subgraph": dict(endpoint)}
 
     def get_edge_list(self) -> list[Edge]:
         """Get the list of Edge instances.
@@ -1991,4 +2227,6 @@ __generate_format_methods(Dot)
 
 
 # Type alias for forward-referenced type
-EdgeDefinition: TypeAlias = Union[EdgeEndpoint, Node, Subgraph, Cluster]
+EdgeDefinition: TypeAlias = Union[
+    EdgeEndpoint, Endpoint, Node, Subgraph, Cluster
+]

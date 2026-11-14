@@ -158,6 +158,48 @@ graph.set_bgcolor("lightyellow")
 graph.get_node("b")[0].set_shape("box")
 ```
 
+#### Inspect structured node references
+
+A DOT node reference can carry a port and a compass point, for example
+`"sales:archive":id:sw`. A quoted ID may itself contain colons, so
+splitting a reference on every `:` would create nodes that do not exist.
+pydot keeps the parts apart and exposes them as a hashable `Endpoint` key:
+
+```python
+graphs = pydot.graph_from_dot_data(
+    'digraph { "sales:archive":id -> archive; }'
+)
+graph = graphs[0]
+edge = graph.get_edges()[0]
+
+edge.get_source_endpoint()          # Endpoint('"sales:archive"', 'id', None)
+edge.get_source_endpoint().to_dict()
+# {'node': '"sales:archive"', 'port': 'id', 'compass': None}
+edge.get_source_endpoint().is_default   # False
+
+# Every edge in one call, ready to be stored:
+graph.get_endpoint_index()
+```
+
+If you only need to read DOT text and persist the relationships, the
+top-level helper does both steps and returns plain dictionaries:
+
+```python
+pydot.endpoint_index_from_dot_data(dot_string)
+# [{'source': {'node': '"sales:archive"', 'port': 'id', 'compass': None},
+#   'destination': {'node': 'archive', 'port': None, 'compass': None},
+#   'attributes': {}}]
+```
+
+Parts that were not written in the DOT input are `None`, which keeps the
+default (no port, no compass) state distinct from an explicit value.
+`Endpoint` (aliased as `EndpointKey`) is a named tuple, so it can be used
+directly as a composite key. `pydot.endpoint_from_ref()` and
+`pydot.Endpoint.from_string()` parse a reference without disturbing
+quoted or backslash-escaped IDs, and `Endpoint.to_string()` renders it
+back to DOT. `Node(Endpoint(...))` and `Edge(Endpoint(...), ...)` accept
+the structured form as input.
+
 ### 3. Output
 
 Here are four different output options:

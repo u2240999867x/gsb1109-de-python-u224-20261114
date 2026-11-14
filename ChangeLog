@@ -9,7 +9,26 @@ Pydot versions since 1.4.2 adhere to [PEP 440-style semantic versioning]
 4.0.2 (unreleased)
 ------------------
 
-- Nothing changed yet.
+Added:
+- Structured endpoint keys for node references.
+  `Edge.get_source_endpoint()`, `Edge.get_destination_endpoint()`,
+  `Edge.get_endpoints()`, `Node.get_endpoint()` and
+  `Graph.get_endpoint_index()` expose a node's name, port and compass
+  separately as a hashable `Endpoint` (alias `EndpointKey`). Missing
+  parts are `None`. `pydot.endpoint_from_ref()` and
+  `Endpoint.from_string()` parse references without splitting quoted
+  IDs, and `Endpoint.to_string()` renders them back to DOT.
+
+Fixed:
+- Quoted IDs containing colons are no longer split into implicit nodes.
+  A reference such as `"sales:archive":id` now names the quoted node
+  `"sales:archive"` with port `id`, both when parsing and when
+  rendering. Escaped quotes inside IDs, and a ported reference coexisting
+  with the same unported name, keep their distinct node references across
+  a DOT round trip.
+- Node port and compass parts are rendered separately, so
+  `id:port:compass` references are quoted correctly.
+
 
 
 4.0.1 (2025-06-17)
