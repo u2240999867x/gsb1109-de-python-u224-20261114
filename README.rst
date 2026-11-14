@@ -75,6 +75,35 @@ Show command line options::
 
     EXIF.py -h
 
+Text encoding diagnostics
+=========================
+
+Multi-byte text in Windows ``XP*`` fields (UTF-16-LE) and ``UserComment``
+tags (ASCII/JIS/UNICODE charset prefix, or private content without any
+declaration) is rendered byte-by-byte by the regular tag output and may
+appear as mojibake or question marks.
+
+The ``--diagnose-text`` option follows each such tag back to its raw bytes,
+states the encoding that was assumed, and lists every byte range that could
+not be decoded with both its content-relative and absolute file offsets::
+
+    EXIF.py --diagnose-text scan.tiff
+
+The same report is available from Python:
+
+.. code-block:: python
+
+    from exifread.text_diagnostics import diagnose_file, format_report
+
+    with open(file_path, "rb") as file_handle:
+        diagnoses = diagnose_file(file_handle)
+        print(format_report(diagnoses, file_path))
+
+The full author name from an ``XPAuthor`` field is available on
+``diagnosis.decoding.text``; undecodable tail bytes (e.g. a truncated final
+character) are collected in ``diagnosis.decoding.undecodable`` rather than
+silently dropped.
+
 Python Script
 =============
 

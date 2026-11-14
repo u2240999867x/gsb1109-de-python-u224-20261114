@@ -1,6 +1,12 @@
 ﻿EXIF.py Change Log
 ##################
 
+Unreleased
+    * Add text encoding diagnostics for XP fields and UserComment tags, with
+      raw-byte traces, charset-prefix detection and byte-level reporting of
+      undecodable content; expose via ``--diagnose-text`` and
+      ``exifread.text_diagnostics``
+
 3.5.1 — 2025-08-23
     * Don't raise exception from decode_maker_note() if strict==False (#243) by Nathan Olson
 

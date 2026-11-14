@@ -23,6 +23,7 @@ import timeit
 from exifread import __version__, exif_log, process_file
 from exifread.core.exceptions import ExifError
 from exifread.tags.fields import FIELD_DEFINITIONS
+from exifread.text_diagnostics import diagnose_file, format_report
 
 logger = exif_log.get_logger()
 
@@ -87,6 +88,15 @@ def get_args() -> argparse.Namespace:
         dest="color",
         help="Output in color (only works with debug on POSIX).",
     )
+    parser.add_argument(
+        "--diagnose-text",
+        action="store_true",
+        dest="diagnose_text",
+        help=(
+            "Report raw bytes and decoding details for XP text fields and "
+            "UserComment tags, flagging bytes that cannot be decoded."
+        ),
+    )
     args = parser.parse_args()
     return args
 
@@ -107,6 +117,12 @@ def run_cli(args: argparse.Namespace) -> None:
         try:
             with open(escaped_fn, "rb") as img_file:
                 logger.info("Opening: %s", escaped_fn)
+
+                if args.diagnose_text:
+                    diagnoses = diagnose_file(img_file)
+                    print(format_report(diagnoses, escaped_fn))
+                    print()
+                    continue
 
                 tag_start = timeit.default_timer()
                 # get the tags
