@@ -1,3 +1,9 @@
+from bibtexparser.middlewares.crossref import CrossrefMiddleware
+from bibtexparser.middlewares.crossref import CrossrefSource
+from bibtexparser.middlewares.crossref import ResolveCrossrefMiddleware
+from bibtexparser.middlewares.crossref import ResolveCrossrefsMiddleware
+from bibtexparser.middlewares.crossref import resolve_crossref
+from bibtexparser.middlewares.crossref import resolve_crossrefs
 from bibtexparser.middlewares.enclosing import AddEnclosingMiddleware
 from bibtexparser.middlewares.enclosing import RemoveEnclosingMiddleware
 from bibtexparser.middlewares.fieldkeys import NormalizeFieldKeys
@@ -28,6 +34,8 @@ from .parsestack import default_unparse_stack
 __all__ = [
     "AddEnclosingMiddleware",
     "BlockMiddleware",
+    "CrossrefMiddleware",
+    "CrossrefSource",
     "LatexDecodingMiddleware",
     "LatexEncodingMiddleware",
     "LibraryMiddleware",
@@ -39,6 +47,8 @@ __all__ = [
     "NameParts",
     "NormalizeFieldKeys",
     "RemoveEnclosingMiddleware",
+    "ResolveCrossrefMiddleware",
+    "ResolveCrossrefsMiddleware",
     "ResolveStringReferencesMiddleware",
     "SeparateCoAuthors",
     "SortBlocksByTypeAndKeyMiddleware",
@@ -48,4 +58,6 @@ __all__ = [
     "SplitNameParts",
     "default_parse_stack",
     "default_unparse_stack",
+    "resolve_crossref",
+    "resolve_crossrefs",
 ]

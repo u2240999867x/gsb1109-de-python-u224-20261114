@@ -87,9 +87,67 @@ Value References and Representation
 :::::::::::::::::::::::::::::::::::
 
 * :mod:`bibtexparser.middlewares.ResolveStringReferencesMiddleware`
+* :mod:`bibtexparser.middlewares.ResolveCrossrefMiddleware`
 * :mod:`bibtexparser.middlewares.MonthIntMiddleware`
 * :mod:`bibtexparser.middlewares.MonthAbbreviationMiddleware`
 * :mod:`bibtexparser.middlewares.MonthLongStringMiddleware`
+
+.. _middleware_crossref:
+
+Crossref Inheritance
+::::::::::::::::::::
+
+:class:`bibtexparser.middlewares.ResolveCrossrefMiddleware` resolves ``crossref``
+fields by inheriting fields from the referenced entry. Fields the entry declares
+itself always win; a parent's ``title`` is inherited as the child's
+``booktitle``, all other fields keep their key. Inheritance is transitive, and
+the nearest declaration wins. An explicitly present field counts as a
+declaration even if it is empty, so ``booktitle = {}`` prevents inheritance.
+
+.. code-block:: python
+
+    library = bibtexparser.parse_file("bibtex.bib")
+    library = bibtexparser.middlewares.ResolveCrossrefMiddleware().transform(library)
+
+The middleware can be re-run after the library changed (e.g. after a parent
+entry was renamed, edited or removed): fields inherited by a previous run are
+recomputed, so the effective fields match those of a freshly rebuilt library.
+Fields inherited by the user are treated as the entry's own declarations.
+
+The source of every inherited value is available via
+:meth:`bibtexparser.middlewares.ResolveCrossrefMiddleware.get_provenance`:
+
+.. code-block:: python
+
+    child = library.entries_dict["somePaper"]
+    provenance = bibtexparser.middlewares.ResolveCrossrefMiddleware.get_provenance(child)
+    source = provenance["booktitle"]
+    source.entry_key   # the entry that declared the value
+    source.field_key   # "title", i.e. the field key in the declaring entry
+    source.path        # ("proceedings2024",) - from direct parent to declaring entry
+    source.level       # 1 for a direct parent
+    source == "proceedings2024"  # CrossrefSource also compares like the entry key
+
+    # Entries that (transitively) depend on an entry can be listed as well:
+    dependents = bibtexparser.middlewares.ResolveCrossrefMiddleware().get_dependents(
+        library, "proceedings2024"
+    )
+    # ... and which of their fields are affected:
+    affected = bibtexparser.middlewares.ResolveCrossrefMiddleware().get_fields_inherited_from(
+        library, "proceedings2024"
+    )
+    # e.g. {"somePaper": ["booktitle", "publisher"]}
+
+Cycles are resolved per field: a cycle only prevents fields that cannot be found
+before the walk would repeat. Fields declared within the cycle, including the
+entry's own fields, remain available.
+
+.. note::
+    The middleware inherits the values as they are when it runs. If inherited
+    fields should undergo the same transformations as the rest of the library
+    (e.g. enclosing removal or name splitting), place it before the
+    corresponding middleware in the parse stack. It is not part of the default
+    parse stack.
 
 .. _middleware_names:
 

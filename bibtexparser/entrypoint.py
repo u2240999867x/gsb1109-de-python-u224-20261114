@@ -205,7 +205,8 @@ def parse_string(
     _seed_preexisting_strings(parsed, library)
 
     middleware: Middleware
-    for middleware in _build_parse_stack(parse_stack, append_middleware):
+    parse_stack = _build_parse_stack(parse_stack, append_middleware)
+    for middleware in parse_stack:
         parsed = middleware.transform(library=parsed)
 
     if library is None:
@@ -213,12 +214,35 @@ def parse_string(
 
     new_blocks = [b for b in parsed.blocks if not _is_seeded_string(b)]
     library.add(new_blocks, fail_on_duplicate_key=False)
+    _rerun_crossref_on_merged_library(parse_stack, library)
     return library
 
 
 def _is_seeded_string(block: Block) -> bool:
     """True for blocks seeded by `_seed_preexisting_strings` (and their transformations)."""
     return bool(block.get_parser_metadata(_PREEXISTING_STRING_KEY))
+
+
+def _rerun_crossref_on_merged_library(parse_stack: list[Middleware], library: Library) -> None:
+    """Re-resolve crossrefs after merging newly parsed blocks into ``library``.
+
+    The parse stack is applied to the newly parsed blocks only. A new entry may
+    however reference (or be referenced by) a pre-existing entry, so crossref
+    inheritance is recomputed on the merged library. The middleware is
+    explicitly re-runnable, hence this is safe even if it already ran on the
+    newly parsed blocks and keeps incremental parsing consistent with parsing
+    everything at once.
+
+    A fresh in-place instance is used, as ``library`` is meant to be mutated
+    (the caller holds a reference to it, and a copying middleware would return
+    a separate library that could not be merged back).
+    """
+    # Imported here to keep the module import graph free of cycles.
+    from .middlewares.crossref import ResolveCrossrefMiddleware
+
+    if not any(isinstance(middleware, ResolveCrossrefMiddleware) for middleware in parse_stack):
+        return
+    ResolveCrossrefMiddleware(allow_inplace_modification=True).transform(library)
 
 
 def _restore_enclosing(string: String) -> None:
