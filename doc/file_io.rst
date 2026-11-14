@@ -195,6 +195,10 @@ Rotating Loggers
     :show-inheritance:
     :members:
 
+.. autoclass:: can.RotatedLogSegment
+    :show-inheritance:
+    :members:
+
 
 Replaying Files
 ---------------

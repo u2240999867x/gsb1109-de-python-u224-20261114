@@ -3,10 +3,13 @@ See the :class:`Logger` class.
 """
 
 import gzip
+import logging
 import os
 import pathlib
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import (
@@ -68,6 +71,88 @@ def _get_logger_for_suffix(suffix: str) -> type[MessageWriter]:
         raise ValueError(
             f'No write support for unknown log format "{suffix}"'
         ) from None
+
+
+log = logging.getLogger("can.io.logger")
+
+
+@dataclass(frozen=True, slots=True)
+class RotatedLogSegment:
+    """A single log file segment that has been finished by a rotating logger.
+
+    Instances are only published after the segment's writer has been closed
+    successfully and (for rollovers) the file has been moved to its final
+    ``filename``. Readers must not open a segment before it is claimed from
+    :meth:`BaseRotatingLogger.claim_completed_segments`, because the file may
+    still be written to or be missing its final frames.
+
+    :ivar index:
+        Zero-based position of the segment in rotation order. The segment that
+        is open when the logger is constructed has index 0.
+    :ivar filename:
+        Absolute path of the completed segment file.
+    :ivar message_count:
+        Number of messages written to the segment. A segment may be empty.
+    :ivar rolled_over:
+        :obj:`True` if the segment was closed because a rollover was triggered,
+        :obj:`False` if it was closed when the logger was stopped.
+    """
+
+    index: int
+    filename: str
+    message_count: int
+    rolled_over: bool
+
+
+class _SegmentCompletionRegistry:
+    """Tracks completed segments until a reader acknowledges them.
+
+    Notifications are delivered at most once per claiming reader and only after
+    the segment was fully finalized. The same segment can be delivered to
+    different readers, but acknowledging it again is a no-op, so a duplicated
+    notification can never confirm a segment twice.
+
+    All operations are guarded by a re-entrant lock so that a reader thread may
+    claim or acknowledge segments while the notifier thread rotates volumes.
+    """
+
+    def __init__(self) -> None:
+        self._completed: dict[int, RotatedLogSegment] = {}
+        self._acknowledged: set[int] = set()
+        self._next_index = 0
+        self._lock = threading.RLock()
+
+    def register(
+        self, filename: StringPathLike, message_count: int, rolled_over: bool
+    ) -> RotatedLogSegment:
+        with self._lock:
+            index = self._next_index
+            self._next_index += 1
+            segment = RotatedLogSegment(
+                index=index,
+                filename=os.path.abspath(os.fspath(filename)),
+                message_count=message_count,
+                rolled_over=rolled_over,
+            )
+            self._completed[index] = segment
+            return segment
+
+    def claim(self) -> tuple[RotatedLogSegment, ...]:
+        with self._lock:
+            if not self._completed:
+                return ()
+            return tuple(
+                segment
+                for index, segment in sorted(self._completed.items())
+                if index not in self._acknowledged
+            )
+
+    def acknowledge(self, index: int) -> bool:
+        with self._lock:
+            if index in self._acknowledged or index not in self._completed:
+                return False
+            self._acknowledged.add(index)
+            return True
 
 
 def _compress(filename: StringPathLike, **kwargs: Any) -> FileIOMessageWriter[Any]:
@@ -187,6 +272,13 @@ class BaseRotatingLogger(MessageWriter, ABC):
 
     def __init__(self, **kwargs: Any) -> None:
         self.writer_kwargs = kwargs
+        self._segment_registry = _SegmentCompletionRegistry()
+        self._segment_message_count = 0
+        self._segment_failed = False
+        self._stopped = False
+        #: Path of the segment file that is currently open for writing, or
+        #: :obj:`None` if the concrete logger does not track segment paths.
+        self._current_filename: StringPathLike | None = None
 
     @property
     @abstractmethod
@@ -235,6 +327,10 @@ class BaseRotatingLogger(MessageWriter, ABC):
     def on_message_received(self, msg: Message) -> None:
         """This method is called to handle the given message.
 
+        Any exception raised while writing the message is re-raised after the
+        current segment has been marked incomplete, so it is never published as
+        completed when it is eventually closed.
+
         :param msg:
             the delivered message
         """
@@ -242,7 +338,87 @@ class BaseRotatingLogger(MessageWriter, ABC):
             self.do_rollover()
             self.rollover_count += 1
 
-        self.writer.on_message_received(msg)
+        try:
+            self.writer.on_message_received(msg)
+        except Exception:  # pylint: disable=broad-except
+            self._segment_failed = True
+            raise
+        self._segment_message_count += 1
+
+    def _finalize_segment(
+        self, filename: StringPathLike, rolled_over: bool
+    ) -> RotatedLogSegment | None:
+        """Close and publish the current segment.
+
+        The segment is only registered as completed when its writer was closed
+        without error and no write to the segment had failed before. Callers
+        must therefore finish all file IO (closing and, on rollover, rotating
+        the file) before invoking this method.
+
+        :param filename:
+            Final path of the segment file.
+        :param rolled_over:
+            Whether the segment was closed due to a rollover rather than
+            :meth:`stop`.
+        :return:
+            The published segment, or :obj:`None` if the segment was not
+            published because it was incomplete.
+        """
+        if self._segment_failed:
+            log.warning(
+                "Not publishing segment %s as completed because writing its "
+                "last frame(s) failed",
+                filename,
+            )
+            self._segment_message_count = 0
+            self._segment_failed = False
+            return None
+
+        segment = self._segment_registry.register(
+            filename=filename,
+            message_count=self._segment_message_count,
+            rolled_over=rolled_over,
+        )
+        self._segment_message_count = 0
+        return segment
+
+    def claim_completed_segments(self) -> tuple[RotatedLogSegment, ...]:
+        """Claim all finished segments that have not been acknowledged yet.
+
+        Only segments whose final frame was written and whose file has been
+        closed are returned, so a reader observing the appearance of a new
+        file name can wait here instead of opening the previous, still open
+        segment and losing its trailing messages. The returned tuple is ordered
+        by segment index and is stable until :meth:`acknowledge_segment` is
+        called: calling this method again without acknowledging returns the
+        same segments, which makes redelivery safe.
+
+        After processing the returned segments the reader should call
+        :meth:`acknowledge_segment` for each of them, possibly from a different
+        process or after reconnecting. Empty segments and the last, possibly
+        undersized segment created on :meth:`stop` are included as well.
+
+        :return:
+            Completed, not yet acknowledged segments in rotation order.
+        """
+        return self._segment_registry.claim()
+
+    def acknowledge_segment(self, index: int) -> bool:
+        """Acknowledge that a previously claimed segment has been consumed.
+
+        Acknowledging removes the segment from future
+        :meth:`claim_completed_segments` results. The same segment cannot be
+        acknowledged twice: duplicate or stale notifications (including the
+        same index delivered twice) return :obj:`False` and leave the state
+        unchanged.
+
+        :param index:
+            :attr:`RotatedLogSegment.index` of the consumed segment.
+        :return:
+            :obj:`True` if this call acknowledged a pending segment,
+            :obj:`False` if the index was already acknowledged or is unknown.
+        """
+        return self._segment_registry.acknowledge(index)
 
     def _get_new_writer(self, filename: StringPathLike) -> MessageWriter:
         """Instantiate a new writer.
@@ -276,8 +452,23 @@ class BaseRotatingLogger(MessageWriter, ABC):
 
         Carry out any final tasks to ensure
         data is persisted and cleanup any open resources.
+
+        The open segment is published as completed (including an empty or
+        undersized last segment) unless closing its writer fails. Calling this
+        method more than once has no additional effect.
         """
-        self.writer.stop()
+        if self._stopped:
+            return
+        try:
+            self.writer.stop()
+        except Exception:  # pylint: disable=broad-except
+            self._segment_failed = True
+            raise
+        finally:
+            self._stopped = True
+
+        if self._current_filename is not None:
+            self._finalize_segment(self._current_filename, rolled_over=False)
 
     def __enter__(self) -> Self:
         return self
@@ -363,6 +554,7 @@ class SizedRotatingLogger(BaseRotatingLogger):
         self.base_filename = os.path.abspath(base_filename)
         self.max_bytes = max_bytes
 
+        self._current_filename = self.base_filename
         self._writer = self._get_new_writer(self.base_filename)
 
     def _get_new_writer(self, filename: StringPathLike) -> SizedMessageWriter:
@@ -387,12 +579,21 @@ class SizedRotatingLogger(BaseRotatingLogger):
 
     def do_rollover(self) -> None:
         if self.writer:
-            self.writer.stop()
+            try:
+                self.writer.stop()
+            except Exception:  # pylint: disable=broad-except
+                self._segment_failed = True
+                raise
 
         sfn = self.base_filename
         dfn = self.rotation_filename(self._default_name())
         self.rotate(sfn, dfn)
 
+        # The segment is only published after the file has been closed and
+        # moved to its final name. A failed final frame keeps it unpublished.
+        self._finalize_segment(dfn, rolled_over=True)
+
+        self._current_filename = self.base_filename
         self._writer = self._get_new_writer(self.base_filename)
 
     def _default_name(self) -> StringPathLike:

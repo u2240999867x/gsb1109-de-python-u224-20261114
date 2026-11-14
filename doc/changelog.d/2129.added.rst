@@ -1,0 +1,10 @@
+Rotating loggers (``can.BaseRotatingLogger`` / ``can.SizedRotatingLogger``) now
+publish finished log files as :class:`can.RotatedLogSegment` objects. Readers can
+claim all completed, not yet acknowledged segments through
+``claim_completed_segments()`` and confirm consumption with
+``acknowledge_segment()``, so they no longer have to watch for new file names and
+risk missing the final frames of the previous volume. A segment is only announced
+after its writer was closed and the file was moved into place; a failed final
+frame or a failed close keeps the volume unpublished. Empty volumes and the
+undersized last volume created on ``stop()`` are announced as well, and a
+duplicated notification can only confirm a given segment once.

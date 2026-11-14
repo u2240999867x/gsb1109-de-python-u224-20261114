@@ -21,6 +21,7 @@ __all__ = [
     "MF4Writer",
     "MessageSync",
     "Printer",
+    "RotatedLogSegment",
     "SizedRotatingLogger",
     "SqliteReader",
     "SqliteWriter",
@@ -41,7 +42,13 @@ __all__ = [
 ]
 
 # Generic
-from .logger import MESSAGE_WRITERS, BaseRotatingLogger, Logger, SizedRotatingLogger
+from .logger import (
+    MESSAGE_WRITERS,
+    BaseRotatingLogger,
+    Logger,
+    RotatedLogSegment,
+    SizedRotatingLogger,
+)
 from .player import MESSAGE_READERS, LogReader, MessageSync
 
 # isort: split
