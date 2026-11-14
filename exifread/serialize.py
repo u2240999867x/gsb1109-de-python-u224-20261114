@@ -2,7 +2,7 @@
 Enable conversion of Exif IfdTags to native Python types
 """
 
-from typing import Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from exifread.core.exif_header import IfdTag
 from exifread.exif_log import get_logger
@@ -10,12 +10,21 @@ from exifread.tags.fields import FieldType
 
 logger = get_logger()
 
-SerializedTagValue = Union[int, float, str, bytes, List[int], List[float], None]
+SerializedTagValue = Union[
+    int,
+    float,
+    str,
+    bytes,
+    List[int],
+    List[float],
+    List[Optional[Union[int, float]]],
+    None,
+]
 SerializedTagDict = Dict[str, SerializedTagValue]
 
 
 def convert_types(
-    exif_tags: Dict[str, Union[IfdTag, bytes]],
+    exif_tags: Dict[str, Any],
 ) -> SerializedTagDict:
     """
     Convert Exif IfdTags to built-in Python types for easier serialization and programmatic use.
@@ -23,6 +32,8 @@ def convert_types(
     - If the printable value of the IfdTag is relevant (e.g. enum type), it is preserved.
     - Otherwise, values are processed based on their field type, with some cleanups applied.
     - Single-element lists are unpacked to return the item directly.
+    - Values that are already built-in Python types are passed through unchanged,
+      so a table mixing raw IfdTags and serialized values converts correctly.
     """
 
     output: SerializedTagDict = {}
@@ -31,6 +42,11 @@ def convert_types(
         # JPEGThumbnail and TIFFThumbnail are the only values
         # in Exif Tags dict that do not have the IfdTag type.
         if isinstance(ifd_tag, bytes):
+            output[tag_name] = ifd_tag
+            continue
+
+        # Already serialized by another consumer (e.g. get_gps_coords): keep as is
+        if not isinstance(ifd_tag, IfdTag):
             output[tag_name] = ifd_tag
             continue
 
@@ -153,7 +169,7 @@ def convert_numeric(ifd_tag: IfdTag, _tag_name: str) -> Union[int, List[int], No
 
 def convert_ratio(
     ifd_tag: IfdTag, _tag_name: str
-) -> Union[int, float, List[int], List[float], None]:
+) -> Union[int, float, List[Optional[Union[int, float]]], None]:
     """
     Handle Ratio and Signed Ratio conversion.
 
@@ -161,17 +177,22 @@ def convert_ratio(
     - int when the denominator is 1 or unused
     - float otherwise
     - a list of int or float, such as GPS Latitude/Longitude/TimeStamp
-    - None for empty values such as some MakerNote Tags
+    - None for empty values, and for individual ratios whose denominator is 0
+
+    A zero denominator cannot represent a number. It is kept as None instead
+    of being collapsed to the numerator, so corrupt components remain
+    distinguishable from genuine zero values (e.g. 0/1) after serialization.
 
     Ratios can be re-created with `Ratio(float_value).limit_denominator()`.
     """
 
-    out = []
+    out: List[Optional[Union[int, float]]] = []
 
     for ratio in ifd_tag.values:
         # Prevent division by 0. Sometimes, EXIF data is full of 0s when a feature is unused.
         if ratio.denominator == 0:
-            ratio = ratio.numerator
+            out.append(None)
+            continue
 
         ratio = float(ratio)
 

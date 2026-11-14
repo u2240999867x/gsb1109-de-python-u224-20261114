@@ -1,6 +1,18 @@
 ﻿EXIF.py Change Log
 ##################
 
+Unreleased
+    * get_gps_coords() no longer mutates the tags dictionary, so it can be
+      combined with convert_types() in any order on the same table, including
+      tables that mix raw IfdTags and serialized values.
+    * get_gps_coords() and Ratio.decimal() return None instead of raising on
+      zero-denominator ratios and unknown direction references.
+    * add analyze_gps_batch() to classify GPS observations per axis and per
+      component as valid, missing or corrupt, enforcing configurable valid
+      ranges and preserving the original corrupt components.
+    * serialize zero-denominator ratios as None instead of collapsing them to
+      the numerator, keeping them distinguishable from genuine zero values.
+
 3.5.1 — 2025-08-23
     * Don't raise exception from decode_maker_note() if strict==False (#243) by Nathan Olson
 

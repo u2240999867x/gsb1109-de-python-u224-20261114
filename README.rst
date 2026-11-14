@@ -205,6 +205,45 @@ For direct JSON serialization, combine this option with ``details=False`` to avo
         exifread.process_file(file_handle, details=False, builtin_types=True)
     )
 
+Ratios with a zero denominator cannot represent a number; they are serialized as
+``None`` rather than collapsed onto the numerator, so they stay distinguishable
+from genuine zero values.
+
+GPS Coordinates
+===============
+
+``exifread.utils.get_gps_coords`` returns the latitude and longitude as decimal
+degrees, or ``None`` when the GPS tags are absent or cannot be decoded (a
+component is missing, has a zero denominator, or the direction reference is
+unknown). It accepts both raw ``IfdTag`` objects and built-in-type dictionaries,
+never modifies its input, and can therefore be combined with
+``convert_types`` in any order.
+
+.. code-block:: python
+
+    from exifread.utils import get_gps_coords
+
+    coords = get_gps_coords(tags)  # (latitude, longitude) or None
+
+``exifread.utils.analyze_gps_batch`` classifies a batch of observations. For each
+axis (latitude and longitude) it reports a ``status`` of ``valid``, ``missing``
+or ``corrupt``, the per-component statuses (distinguishing a missing direction,
+a zero denominator and a real zero), the original components, and human-readable
+diagnostics. Business valid ranges can be supplied per axis.
+
+.. code-block:: python
+
+    from exifread.utils import analyze_gps_batch
+
+    results = analyze_gps_batch(
+        observations,
+        latitude_range=(-90.0, 90.0),
+        longitude_range=(-180.0, 180.0),
+    )
+    for result in results:
+        latitude = result["latitude"]
+        print(latitude["status"], latitude["value"], latitude["diagnostics"])
+
 Usage Example
 =============
 
