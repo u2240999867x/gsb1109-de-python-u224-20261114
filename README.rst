@@ -567,6 +567,78 @@ and::
 
 You can run tests against python versions 3.9-3.14 via `tox` (if you have them installed)
 
+Versioned rule sets
+-------------------
+
+When several workers evaluate orders while a configuration is switched between
+expression sets, evaluating against a half-edited set of rules would give
+inconsistent results.  The ``rule_versions`` module adds an atomic publication
+lifecycle on top of simpleeval:
+
+* the whole rule set is validated and *published as one immutable version*;
+* publication is refused if an expression does not parse, references a rule
+  that is missing, or rules reference each other in a cycle;
+* an order is evaluated against a single pinned published version, so an order
+  started before a switch keeps using the old version until it finishes;
+* every version has a JSON-serialisable, checksummed snapshot, so past orders
+  can be replayed against the exact original configuration.
+
+.. code-block:: pycon
+
+    >>> from rule_versions import RuleSet, MissingRuleReference
+    >>> rules = RuleSet(functions={"round": round}, externals=["amount", "region"])
+    >>> rules.replace_rules({
+    ...     "base_fee": "amount * 0.05",
+    ...     "surcharge": "base_fee + (10 if region == 'VIP' else 0)",
+    ...     "total": "round(surcharge + amount, 2)",
+    ... })
+    >>> rules.publish("first version")
+    1
+
+Derived rules may reference each other; the resolver memoises each rule once
+per order.  Removing a referenced rule makes the next publish fail, while
+already published versions keep working:
+
+.. code-block:: pycon
+
+    >>> order = {"order_id": "ORD-1", "amount": 100, "region": "VIP"}
+    >>> rules.evaluate_order(order, target="total").result
+    115.0
+    >>> draft = dict(rules.draft)
+    >>> del draft["base_fee"]
+    >>> rules.replace_rules(draft)
+    >>> rules.publish("broken")
+    Traceback (most recent call last):
+        ...
+    rule_versions.MissingRuleReference: Cannot publish: referenced rule(s) missing: ['base_fee'].
+
+Pin an order to a version explicitly, or let it use the current one.  Old
+orders are replayed by passing the old version number, and every evaluation
+carries a complete, restorable snapshot of the configuration it used:
+
+.. code-block:: pycon
+
+    >>> rules.replace_rules({
+    ...     "base_fee": "amount * 0.08",
+    ...     "surcharge": "base_fee + (15 if region == 'VIP' else 0)",
+    ...     "total": "round(surcharge + amount, 2)",
+    ... })
+    >>> rules.publish("second version")
+    2
+    >>> rules.evaluate_order(order, target="total", version=1).result
+    115.0
+    >>> evaluation = rules.evaluate_order(order, target="total", version=2)
+    >>> evaluation.result
+    123.0
+    >>> snapshot = evaluation.configuration
+    >>> restored = RuleSet.from_snapshot(dict(snapshot), functions={"round": round}, publish=True)
+    >>> restored.evaluate_order(order, target="total", version=2).result
+    123.0
+
+A tampered snapshot fails its checksum check instead of being silently
+replayed.  All operations are thread-safe: workers may evaluate orders while
+another thread publishes a new version.
+
 BEWARE
 ------
 
