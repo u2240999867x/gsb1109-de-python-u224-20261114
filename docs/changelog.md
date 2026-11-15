@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add an inventory model that groups wheels by normalized project name and
+  version, hoists only metadata shared by every artifact, and reports
+  field divergences with per-artifact provenance.
+
 ## v1.1.0 (Oct 12, 2026)
 - Add early return when there are no optimization levels to compile bytecode for (#341)
 - Avoid building a `pathlib.Path` object for each record entry (#342)
