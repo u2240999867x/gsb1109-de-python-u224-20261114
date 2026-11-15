@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Add `installer.catalog`, a release-scoped, searchable catalog of entry point declarations that evaluates extras and environment markers and reports ambiguous commands.
+
 ## v1.1.0 (Oct 12, 2026)
 - Add early return when there are no optimization levels to compile bytecode for (#341)
 - Avoid building a `pathlib.Path` object for each record entry (#342)
