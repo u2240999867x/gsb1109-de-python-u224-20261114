@@ -110,11 +110,14 @@ well:
 from __future__ import annotations
 
 import ast
+import datetime
 import operator as op
 import os
 import sys
 import types
 import warnings
+from collections import defaultdict
+from dataclasses import dataclass
 from random import random
 
 ########################################
@@ -436,6 +439,585 @@ class ModuleWrapper:
             raise FeatureNotAvailable(f"Access to '{name}' is not allowed on this wrapped module")
 
         return getattr(self._module, name)
+
+
+########################################
+# As-of ("bitemporal") code table lookup:
+#
+# A code table can contain more than one declaration for the same business key.
+# Each declaration has a business-time validity interval and a knowledge time
+# (when the declaration became known).  Lookups therefore need both a business
+# date and a knowledge cutoff:
+#
+# - business date: which day the transaction happened;
+# - knowledge cutoff: what was known at that point in time;
+# - business key: the row to look up.
+#
+# Validity intervals are half-open: [valid_from, valid_to).  A declaration
+# published after the knowledge cutoff is ignored, so backfilled corrections
+# only affect queries made at or after their publication.  Among the visible,
+# currently-valid declarations, the highest priority wins; at equal priority,
+# the latest publication wins.  Declarations still tied after that are all
+# returned as ambiguous rather than picked by input order.
+
+_MISSING = object()
+
+
+def _coerce_date(value, field_name="date"):
+    """Return a calendar date from a date, datetime, or ISO-8601 string."""
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return datetime.date.fromisoformat(text)
+        except ValueError:
+            try:
+                return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+            except ValueError as exc:
+                raise ValueError(f"{field_name} is not an ISO-8601 date: {value!r}") from exc
+    raise TypeError(f"{field_name} must be a date, datetime, or ISO-8601 string")
+
+
+def _coerce_knowledge(value, *, end_of_day=False):
+    """Return a comparable knowledge-time value.
+
+    Date-only cutoffs mean "by the end of that day", while date-only
+    declarations mean "known from the start of that day".  This makes a
+    correction published on the same calendar day visible to a same-day
+    cutoff.
+    """
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, datetime.date):
+        moment = datetime.time.max if end_of_day else datetime.time.min
+        return datetime.datetime.combine(value, moment)
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            day = datetime.date.fromisoformat(text)
+        except ValueError:
+            try:
+                return datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError(
+                    f"knowledge time is not an ISO-8601 date or datetime: {value!r}"
+                ) from exc
+        moment = datetime.time.max if end_of_day else datetime.time.min
+        return datetime.datetime.combine(day, moment)
+    raise TypeError("knowledge time must be a date, datetime, or ISO-8601 string")
+
+
+def _known_sort_key(value):
+    if value is None:
+        return (0, "")
+    return (1, _coerce_knowledge(value))
+
+
+def _priority_sort_key(value):
+    if value is None:
+        return (0, 0)
+    if isinstance(value, bool):
+        return (1, int(value))
+    if isinstance(value, (int, float)):
+        return (1, value)
+    return (2, str(value))
+
+
+def _source_sort_key(value):
+    return (type(value).__name__, repr(value))
+
+
+def _declaration_sort_key(declaration):
+    return (
+        _source_sort_key(declaration.source),
+        repr(declaration.code),
+        repr(declaration.valid_from),
+        repr(declaration.valid_to),
+        repr(declaration.known_at),
+        _priority_sort_key(declaration.priority),
+    )
+
+
+@dataclass(frozen=True, init=False)
+class CodeDeclaration:
+    """One declaration in a bitemporal code table.
+
+    ``valid_from``/``valid_to`` describe when the code applies in business
+    time.  The interval is half-open, so ``valid_to`` itself is not included.
+    ``known_at`` (alias ``published_at``) is when the declaration became
+    available to the business.  ``priority`` resolves declarations from
+    different authorities; ``source`` identifies the declaration origin.
+
+    Keyword aliases are accepted for convenience because code tables often
+    use different column names.  In particular, ``published_at``,
+    ``effective_from``, ``effective_to``, ``key``, ``value``, and ``source_id``
+    are accepted.
+    """
+
+    business_key: object
+    code: object
+    valid_from: object
+    valid_to: object
+    known_at: object
+    priority: object
+    source: object
+
+    def __init__(
+        self,
+        business_key=_MISSING,
+        code=_MISSING,
+        valid_from=_MISSING,
+        valid_to=_MISSING,
+        known_at=_MISSING,
+        priority=_MISSING,
+        source=_MISSING,
+        **aliases,
+    ):
+        alias_names = {
+            "key": "business_key",
+            "business_id": "business_key",
+            "department_key": "business_key",
+            "department_code": "code",
+            "dept_code": "code",
+            "value": "code",
+            "result": "code",
+            "effective_from": "valid_from",
+            "from_date": "valid_from",
+            "start": "valid_from",
+            "start_date": "valid_from",
+            "valid_start": "valid_from",
+            "effective_to": "valid_to",
+            "to_date": "valid_to",
+            "end": "valid_to",
+            "end_date": "valid_to",
+            "valid_end": "valid_to",
+            "published_at": "known_at",
+            "published": "known_at",
+            "publication_time": "known_at",
+            "known_from": "known_at",
+            "knowledge_time": "known_at",
+            "version_time": "known_at",
+            "created_at": "known_at",
+            "updated_at": "known_at",
+            "precedence": "priority",
+            "rank": "priority",
+            "source_id": "source",
+            "origin": "source",
+            "provenance": "source",
+        }
+        values = {
+            "business_key": business_key,
+            "code": code,
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+            "known_at": known_at,
+            "priority": priority,
+            "source": source,
+        }
+        for alias, canonical in alias_names.items():
+            if alias not in aliases:
+                continue
+            alias_value = aliases.pop(alias)
+            current = values[canonical]
+            if current is not _MISSING and current != alias_value:
+                raise TypeError(f"CodeDeclaration got both {canonical!r} and its alias {alias!r}")
+            values[canonical] = alias_value
+        if aliases:
+            unexpected = ", ".join(sorted(aliases))
+            raise TypeError(f"CodeDeclaration got unexpected arguments: {unexpected}")
+
+        for required in ("business_key", "code", "valid_from"):
+            if values[required] is _MISSING:
+                raise TypeError(f"CodeDeclaration requires {required!r}")
+
+        if values["valid_to"] is _MISSING:
+            values["valid_to"] = None
+        if values["known_at"] is _MISSING:
+            values["known_at"] = None
+        if values["priority"] is _MISSING:
+            values["priority"] = 0
+        if values["source"] is _MISSING:
+            values["source"] = None
+
+        valid_from_value = values["valid_from"]
+        valid_to_value = values["valid_to"]
+        if isinstance(valid_from_value, str):
+            valid_from_value = _coerce_date(valid_from_value, "valid_from")
+        if isinstance(valid_to_value, str):
+            valid_to_value = _coerce_date(valid_to_value, "valid_to")
+
+        if valid_to_value is not None:
+            try:
+                empty = valid_to_value <= valid_from_value
+            except TypeError:
+                empty = _coerce_date(valid_to_value, "valid_to") <= _coerce_date(
+                    valid_from_value, "valid_from"
+                )
+            if empty:
+                raise ValueError("valid_to must be after valid_from")
+
+        known_at_value = values["known_at"]
+        if isinstance(known_at_value, str):
+            try:
+                known_at_value = _coerce_knowledge(known_at_value)
+            except ValueError:
+                known_at_value = _coerce_date(known_at_value, "known_at")
+
+        object.__setattr__(self, "business_key", values["business_key"])
+        object.__setattr__(self, "code", values["code"])
+        object.__setattr__(self, "valid_from", valid_from_value)
+        object.__setattr__(self, "valid_to", valid_to_value)
+        object.__setattr__(self, "known_at", known_at_value)
+        object.__setattr__(
+            self, "priority", 0 if values["priority"] is None else values["priority"]
+        )
+        object.__setattr__(self, "source", values["source"])
+
+    def __repr__(self):
+        return (
+            "CodeDeclaration("
+            f"business_key={self.business_key!r}, code={self.code!r}, "
+            f"valid_from={self.valid_from!r}, valid_to={self.valid_to!r}, "
+            f"known_at={self.known_at!r}, priority={self.priority!r}, "
+            f"source={self.source!r})"
+        )
+
+    @property
+    def key(self):
+        return self.business_key
+
+    @property
+    def value(self):
+        return self.code
+
+    @property
+    def published_at(self):
+        return self.known_at
+
+    @property
+    def effective_from(self):
+        return self.valid_from
+
+    @property
+    def effective_to(self):
+        return self.valid_to
+
+    @property
+    def source_id(self):
+        return self.source
+
+    def covers(self, business_date):
+        """Whether the half-open validity interval contains ``business_date``."""
+        day = _coerce_date(business_date, "business_date")
+        start = _coerce_date(self.valid_from, "valid_from")
+        if day < start:
+            return False
+        if self.valid_to is None:
+            return True
+        return day < _coerce_date(self.valid_to, "valid_to")
+
+
+@dataclass(frozen=True, init=False)
+class CodeLookupResult:
+    """Result of an as-of code lookup.
+
+    ``code`` is the selected code, or ``None`` when equal-priority sources
+    disagree.  ``sources`` always contains every declaration that remains tied
+    for the selected priority and knowledge time, in a deterministic order.
+    ``ambiguous`` is true when more than one declaration remains tied.
+    """
+
+    code: object
+    sources: tuple
+    declarations: tuple
+    ambiguous: bool
+    business_date: object
+    knowledge_cutoff: object
+    business_key: object
+
+    def __init__(
+        self,
+        code=None,
+        sources=(),
+        declarations=(),
+        ambiguous=False,
+        business_date=None,
+        knowledge_cutoff=None,
+        business_key=None,
+    ):
+        declarations = tuple(declarations)
+        sources = tuple(sources)
+        if declarations and not sources:
+            sources = tuple(declaration.source for declaration in declarations)
+        if len(declarations) > 1:
+            ambiguous = True
+        object.__setattr__(self, "code", code)
+        object.__setattr__(self, "sources", sources)
+        object.__setattr__(self, "declarations", declarations)
+        object.__setattr__(self, "ambiguous", bool(ambiguous))
+        object.__setattr__(self, "business_date", business_date)
+        object.__setattr__(self, "knowledge_cutoff", knowledge_cutoff)
+        object.__setattr__(self, "business_key", business_key)
+
+    @property
+    def found(self):
+        return self.code is not None or bool(self.declarations)
+
+    @property
+    def department_code(self):
+        return self.code
+
+    @property
+    def department(self):
+        return self.code
+
+    @property
+    def value(self):
+        return self.code
+
+    @property
+    def source(self):
+        return self.sources[0] if len(self.sources) == 1 else None
+
+    @property
+    def is_ambiguous(self):
+        return self.ambiguous
+
+    def as_dict(self):
+        return {
+            "code": self.code,
+            "sources": self.sources,
+            "declarations": self.declarations,
+            "ambiguous": self.ambiguous,
+        }
+
+    def get(self, key, default=None):
+        return self.as_dict().get(key, default)
+
+    def keys(self):
+        return self.as_dict().keys()
+
+    def values(self):
+        return self.as_dict().values()
+
+    def items(self):
+        return self.as_dict().items()
+
+    def __getitem__(self, key):
+        return self.as_dict()[key]
+
+    def __eq__(self, other):
+        if isinstance(other, CodeLookupResult):
+            return (
+                self.code == other.code
+                and self.sources == other.sources
+                and self.declarations == other.declarations
+                and self.ambiguous == other.ambiguous
+            )
+        if isinstance(other, str):
+            return self.code == other
+        if isinstance(other, dict):
+            return all(self.get(key, _MISSING) == value for key, value in other.items())
+        if isinstance(other, tuple) and len(other) == 2:
+            return self.code == other[0] and self.sources == other[1]
+        return NotImplemented
+
+    def __hash__(self):
+        return hash((self.code, self.sources, self.ambiguous))
+
+    def __iter__(self):
+        return iter((self.code, self.sources))
+
+    def __len__(self):
+        return 2
+
+    def __str__(self):
+        return "" if self.code is None else str(self.code)
+
+    def __repr__(self):
+        return (
+            "CodeLookupResult("
+            f"code={self.code!r}, sources={self.sources!r}, "
+            f"ambiguous={self.ambiguous!r})"
+        )
+
+
+class BitemporalCodeTable:
+    """Indexed code table supporting as-of (business time + knowledge time) reads.
+
+    Example:
+        >>> table = BitemporalCodeTable([
+        ...     {"key": "E01", "code": "D1", "effective_from": "2024-01-01",
+        ...      "effective_to": "2024-04-01", "published_at": "2024-01-01",
+        ...      "source": "initial"},
+        ... ])
+        >>> table.lookup("2024-02-01", "2024-02-15", "E01").code
+        'D1'
+    """
+
+    def __init__(self, declarations=()):
+        if isinstance(declarations, BitemporalCodeTable):
+            declarations = declarations.declarations
+        elif isinstance(declarations, CodeDeclaration):
+            declarations = (declarations,)
+        elif isinstance(declarations, dict):
+            if any(key in declarations for key in ("business_key", "key", "code")):
+                declarations = (declarations,)
+            else:
+                expanded = []
+                for key, rows in declarations.items():
+                    if isinstance(rows, (str, bytes, CodeDeclaration, dict)):
+                        rows = (rows,)
+                    for row in rows:
+                        if isinstance(row, dict):
+                            row = dict(row)
+                            row.setdefault("business_key", key)
+                        expanded.append(row)
+                declarations = expanded
+
+        unique = {}
+        for declaration in declarations:
+            if not isinstance(declaration, CodeDeclaration):
+                if isinstance(declaration, dict):
+                    declaration = CodeDeclaration(**declaration)
+                elif isinstance(declaration, (tuple, list)):
+                    declaration = CodeDeclaration(*declaration)
+                else:
+                    raise TypeError(
+                        "declarations must contain CodeDeclaration objects, mappings, "
+                        "or positional tuples"
+                    )
+            identity = (
+                repr(declaration.business_key),
+                repr(declaration.code),
+                repr(declaration.valid_from),
+                repr(declaration.valid_to),
+                repr(declaration.known_at),
+                repr(declaration.priority),
+                repr(declaration.source),
+            )
+            unique.setdefault(identity, declaration)
+
+        self.declarations = tuple(unique.values())
+        self._by_key = defaultdict(list)
+        for declaration in self.declarations:
+            self._by_key[declaration.business_key].append(declaration)
+
+    def lookup(self, business_date, knowledge_cutoff, business_key):
+        """Look up ``business_key`` for a business date and knowledge cutoff.
+
+        The knowledge cutoff is inclusive: a declaration published exactly at
+        the cutoff is known.  Date-only cutoffs are interpreted as the end of
+        that day.
+        """
+        day = _coerce_date(business_date, "business_date")
+        cutoff = (
+            None
+            if knowledge_cutoff is None
+            else _coerce_knowledge(knowledge_cutoff, end_of_day=True)
+        )
+
+        candidates = []
+        for declaration in self._by_key.get(business_key, ()):
+            if not declaration.covers(day):
+                continue
+            if cutoff is not None and declaration.known_at is not None:
+                if _coerce_knowledge(declaration.known_at) > cutoff:
+                    continue
+            candidates.append(declaration)
+
+        if not candidates:
+            return CodeLookupResult(
+                code=None,
+                sources=(),
+                declarations=(),
+                ambiguous=False,
+                business_date=business_date,
+                knowledge_cutoff=knowledge_cutoff,
+                business_key=business_key,
+            )
+
+        best_priority = max(_priority_sort_key(d.priority) for d in candidates)
+        candidates = [d for d in candidates if _priority_sort_key(d.priority) == best_priority]
+
+        best_known = max(_known_sort_key(d.known_at) for d in candidates)
+        candidates = [d for d in candidates if _known_sort_key(d.known_at) == best_known]
+        candidates.sort(key=_declaration_sort_key)
+
+        codes = []
+        for declaration in candidates:
+            if not any(declaration.code == existing for existing in codes):
+                codes.append(declaration.code)
+        code = codes[0] if len(codes) == 1 else None
+
+        return CodeLookupResult(
+            code=code,
+            sources=tuple(d.source for d in candidates),
+            declarations=tuple(candidates),
+            ambiguous=len(candidates) > 1,
+            business_date=business_date,
+            knowledge_cutoff=knowledge_cutoff,
+            business_key=business_key,
+        )
+
+    __call__ = lookup
+
+    def as_lookup(self):
+        """Return a callable suitable for ``SimpleEval.functions``."""
+        return make_asof_lookup(self)
+
+    lookup_as_of = lookup
+    lookup_known_at = lookup
+
+
+class AsOfCodeTable(BitemporalCodeTable):
+    """Alias class name for :class:`BitemporalCodeTable`."""
+
+
+CodeTable = BitemporalCodeTable
+
+
+def make_asof_lookup(table, function_name="lookup_code"):
+    """Bind ``table`` into a three-argument function for expressions.
+
+    The returned function accepts ``(business_date, knowledge_cutoff,
+    business_key)`` and returns a :class:`CodeLookupResult`.
+    """
+    if not isinstance(table, BitemporalCodeTable):
+        table = BitemporalCodeTable(table)
+
+    def lookup(business_date, knowledge_cutoff, business_key):
+        return table.lookup(business_date, knowledge_cutoff, business_key)
+
+    lookup.__name__ = function_name
+    lookup.__qualname__ = function_name
+    lookup.table = table
+    return lookup
+
+
+make_as_of_lookup = make_asof_lookup
+make_bitemporal_lookup = make_asof_lookup
+make_code_lookup = make_asof_lookup
+make_lookup = make_asof_lookup
+
+
+def lookup_as_of(table, business_date, knowledge_cutoff, business_key):
+    """Convenience wrapper around ``table.lookup(...)``."""
+    return table.lookup(business_date, knowledge_cutoff, business_key)
+
+
+lookup_asof = lookup_as_of
+lookup_known_at = lookup_as_of
+bitemporal_lookup = lookup_as_of
+
+
+def install_code_table(evaluator, table, name="lookup_code"):
+    """Register an as-of lookup function on a ``SimpleEval`` instance."""
+    evaluator.functions[name] = make_asof_lookup(table, function_name=name)
+    return evaluator
 
 
 ########################################

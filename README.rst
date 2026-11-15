@@ -318,6 +318,54 @@ The two default names that are provided are ``True`` and ``False``.  So if you w
 your own names, but want ``True`` and ``False`` to keep working, either provide them yourself,
 or ``.copy()`` and ``.update`` the ``DEFAULT_NAMES``. (See functions example above).
 
+As-Of Code Table Lookup
+-----------------------
+
+Historical rows often need a code that was valid on the transaction date, using
+only facts published by a knowledge cutoff.  ``BitemporalCodeTable`` provides
+this lookup:
+
+.. code-block:: pycon
+
+    >>> from simpleeval import BitemporalCodeTable, SimpleEval, install_code_table
+    >>> table = BitemporalCodeTable([
+    ...     {"key": "E01", "code": "D1", "effective_from": "2024-01-01",
+    ...      "effective_to": "2024-04-01", "published_at": "2024-01-01",
+    ...      "source": "initial-load"},
+    ...     {"key": "E01", "code": "D2", "effective_from": "2024-01-01",
+    ...      "published_at": "2024-03-15", "priority": 2,
+    ...      "source": "correction"},
+    ... ])
+    >>> s = SimpleEval()
+    >>> install_code_table(s, table)
+    >>> s.eval("lookup_code('2024-02-15', '2024-03-14', 'E01').code")
+    'D1'
+    >>> s.eval("lookup_code('2024-02-15', '2024-03-15', 'E01').code")
+    'D2'
+
+Validity intervals are half-open: ``[valid_from, valid_to)``.  Looking up
+``2024-04-01`` therefore matches the declaration that starts on that day, not
+the one ending on it.  ``valid_to=None`` means open ended.
+
+The second argument is the knowledge cutoff.  Declarations published after it
+are ignored, so a backdated correction never changes an answer for a query made
+before the correction was published.  A date-only cutoff means the end of that
+day; a date-only publication time means the start of that day.  Publication
+timestamps are inclusive at the cutoff.
+
+``priority`` selects between declarations from different authorities; the
+highest priority wins, and at equal priority the latest publication wins.  If
+several declarations remain tied after that, the result is ambiguous: ``.code``
+is ``None``, ``.ambiguous`` is true, and ``.sources`` / ``.declarations``
+contain all tied rows in a deterministic order, independent of input order.  If
+the tied rows agree on the code, ``.code`` still returns that shared code.
+
+The result also supports mapping-style access, ``.as_dict()``, and comparison
+to a plain code string, so expressions can use either ``lookup_code(...).code``
+or ``lookup_code(...)`` directly.  Use ``make_asof_lookup(table)`` to build the
+callable yourself, or ``table.lookup(business_date, knowledge_cutoff,
+business_key)`` when not inside an expression.
+
 Creating an Evaluator Class
 ---------------------------
 
