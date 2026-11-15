@@ -9,7 +9,15 @@ Pydot versions since 1.4.2 adhere to [PEP 440-style semantic versioning]
 4.0.2 (unreleased)
 ------------------
 
-- Nothing changed yet.
+Added:
+- Path-scoped subgraph grouping and membership tables.
+  `Graph.get_group_table()` returns one row per logical group path;
+  reopened named subgraphs share a path, while each anonymous block gets
+  its own. `Graph.get_membership_table()` returns dataset/group rows
+  (a dataset may belong to several groups), `Graph.get_group_occurrences()`
+  reports each DOT block, and the tables export to CSV/JSON.
+  `graph_from_dot_data()`/`graph_from_dot_file()` accept `path_scope`, and
+  `to_string(show_group_paths=True)` annotates exported blocks.
 
 
 4.0.1 (2025-06-17)

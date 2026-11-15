@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import copy
+import csv
 import errno
+import io
 import itertools
+import json
 import logging
 import os
 import re
@@ -136,6 +139,495 @@ DEFAULT_PROGRAMS: Final = {
     "fdp",
     "sfdp",
 }
+
+
+# A group path is a sequence of path components.  Named subgraphs contribute
+# their (fully qualified) name as a string; anonymous subgraphs contribute
+# their ordinal among anonymous siblings as an integer.  Using an integer
+# keeps anonymous paths distinct without inventing a name that could collide
+# with a real subgraph name.
+GroupPathElement = Union[str, int]
+GroupPath = tuple[GroupPathElement, ...]
+
+
+def _coerce_group_path(value: object) -> GroupPath:
+    """Turn a scope/path declaration into a group path tuple.
+
+    A bare string is treated as a slash-separated path for convenience.
+    Explicit sequences keep each item as one component, so a group name
+    that itself contains a slash is not split again.
+    """
+    if value is None or value == "":
+        return ()
+    if isinstance(value, str):
+        if "/" in value:
+            return tuple(
+                _coerce_group_path(part) for part in value.split("/") if part
+            )
+        return (value,)
+    if isinstance(value, (list, tuple)):
+        parts: list[GroupPathElement] = []
+        for item in value:
+            if isinstance(item, int) and not isinstance(item, bool):
+                parts.append(item)
+            else:
+                parts.append(str(item))
+        return tuple(parts)
+    return (str(value),)
+
+
+def _group_id_from_path(path: GroupPath) -> str:
+    """Build a stable identifier from a typed group path.
+
+    The identifier is meant for tables and lookups.  The typed ``path``
+    value remains the authoritative representation, so a named group
+    called ``"#1"`` can never be confused with an anonymous group.
+    """
+    parts = []
+    for part in path:
+        if isinstance(part, int) and not isinstance(part, bool):
+            parts.append(f"{{anonymous #{part}}}")
+        else:
+            name = str(part)
+            name = name.replace("\\", "\\\\").replace("/", "\\/")
+            parts.append(name)
+    return "/".join(parts)
+
+
+def format_group_path(path: GroupPath) -> str:
+    """Render a group path for tables and logs."""
+    return _group_id_from_path(path)
+
+
+def _is_default_node_name(name: str) -> bool:
+    return name.lower() in ("graph", "node", "edge")
+
+
+def _node_names(
+    graph_obj: AttributeDict,
+    include_defaults: bool = False,
+    recursive: bool = False,
+) -> set[str]:
+    """Return dataset names declared directly or below a graph object."""
+    names: set[str] = set()
+    for key, nodes in graph_obj.get("nodes", {}).items():
+        for node in nodes:
+            name = node.get("name", key)
+            if name is None:
+                continue
+            name = str(name)
+            if not include_defaults and _is_default_node_name(name):
+                continue
+            names.add(name)
+
+    if recursive:
+        for child in _child_graph_objects(graph_obj):
+            names.update(
+                _node_names(
+                    child,
+                    include_defaults=include_defaults,
+                    recursive=True,
+                )
+            )
+    return names
+
+
+def _child_graph_objects(graph_obj: AttributeDict) -> list[AttributeDict]:
+    children = []
+    for objs in graph_obj.get("subgraphs", {}).values():
+        children.extend(objs)
+    return children
+
+
+def _sorted_subgraph_objects(graph_obj: AttributeDict) -> list[AttributeDict]:
+    """Return subgraph occurrences in source order.
+
+    ``sequence`` values are assigned in source order.  Only subgraphs are
+    compared with subgraphs, so inserting or moving an unrelated node
+    declaration cannot change the relative order used for anonymous
+    group identities.
+    """
+    entries = []
+    for group_index, (_, objs) in enumerate(
+        graph_obj.get("subgraphs", {}).items()
+    ):
+        for child_index, child in enumerate(objs):
+            sequence = child.get("sequence")
+            if not isinstance(sequence, (int, float)):
+                sequence = float("inf")
+            entries.append(
+                (sequence, group_index, child_index, child)
+            )
+    entries.sort(key=lambda entry: entry[:3])
+    return [cast(AttributeDict, entry[3]) for entry in entries]
+
+
+def _top_graph(graph: Graph) -> Graph:
+    """Follow parent links to the topmost graph without looping."""
+    root = graph
+    seen: set[int] = set()
+    while True:
+        seen.add(id(root.obj_dict))
+        parent = root.get_parent_graph()
+        if parent is None or parent is root or id(parent.obj_dict) in seen:
+            return root
+        root = parent
+
+
+def _group_scope_of(graph: Graph) -> GroupPath:
+    raw = graph.obj_dict.get("group_scope")
+    if raw is None:
+        raw = graph.obj_dict.get("path_scope")
+    return _coerce_group_path(raw)
+
+
+def _anonymous_ordinal(
+    graph_obj: AttributeDict, child_obj: AttributeDict
+) -> int:
+    index = 0
+    for child in _sorted_subgraph_objects(graph_obj):
+        if not str(child.get("name") or ""):
+            index += 1
+        if child is child_obj:
+            return index
+    return index
+
+
+def _structural_prefix(root: Graph, target: Graph) -> GroupPath:
+    """Return the structural path from ``root`` down to ``target``.
+
+    Parent links are not used: pydot repoints them to the top graph, so
+    they do not retain intermediate subgraph names.
+    """
+    if target is root:
+        return ()
+
+    target_id = id(target.obj_dict)
+    stack: list[tuple[AttributeDict, GroupPath]] = [(root.obj_dict, ())]
+    seen: set[int] = set()
+    while stack:
+        graph_obj, prefix = stack.pop()
+        if id(graph_obj) in seen:
+            continue
+        seen.add(id(graph_obj))
+        for child in reversed(_sorted_subgraph_objects(graph_obj)):
+            name = str(child.get("name") or "")
+            component: GroupPathElement = (
+                name if name else _anonymous_ordinal(graph_obj, child)
+            )
+            if id(child) == target_id:
+                return prefix + (component,)
+            stack.append((child, prefix + (component,)))
+    return ()
+
+
+def _collect_group_occurrences(
+    graph: Graph,
+    scope: GroupPath,
+    base_path: GroupPath,
+    include_defaults: bool = False,
+) -> list[dict[str, Any]]:
+    """Walk a graph and describe every subgraph occurrence."""
+    occurrences: list[dict[str, Any]] = []
+    counts: dict[GroupPath, int] = {}
+    # Anonymous ordinals are accumulated per effective parent path.  Reopening
+    # a named subgraph must not restart anonymous numbering, or an
+    # anonymous block declared inside the reopened group would silently
+    # merge with an earlier anonymous block.
+    anonymous_counts: dict[GroupPath, int] = {}
+    order = 0
+
+    def walk(
+        graph_obj: AttributeDict,
+        current_scope: GroupPath,
+        local_path: GroupPath,
+    ) -> None:
+        nonlocal order
+        parent_path = current_scope + local_path
+        for child in _sorted_subgraph_objects(graph_obj):
+            name = str(child.get("name") or "")
+            if name:
+                component: GroupPathElement = name
+                kind = "named"
+            else:
+                anonymous_counts[parent_path] = (
+                    anonymous_counts.get(parent_path, 0) + 1
+                )
+                component = anonymous_counts[parent_path]
+                kind = "anonymous"
+
+            declared_path = child.get("group_path")
+            if declared_path is not None:
+                child_path = _coerce_group_path(
+                    list(declared_path)
+                    if isinstance(declared_path, (list, tuple))
+                    else declared_path
+                )
+                child_scope = ()
+                child_local_path = child_path
+            else:
+                declared_scope = child.get("group_scope")
+                if declared_scope is not None:
+                    child_scope = _coerce_group_path(
+                        list(declared_scope)
+                        if isinstance(declared_scope, (list, tuple))
+                        else declared_scope
+                    )
+                    child_local_path = (component,)
+                else:
+                    child_scope = current_scope
+                    child_local_path = local_path + (component,)
+                child_path = child_scope + child_local_path
+
+            counts[child_path] = counts.get(child_path, 0) + 1
+            order += 1
+            occurrences.append(
+                {
+                    "obj": child,
+                    "path": child_path,
+                    "local_path": child_local_path,
+                    "parent_path": parent_path,
+                    "scope": child_scope,
+                    "name": name or None,
+                    "kind": kind,
+                    "occurrence": counts[child_path],
+                    "depth": len(child_local_path),
+                    "order": order,
+                    "direct_nodes": _node_names(
+                        child, include_defaults=include_defaults
+                    ),
+                    "tree_nodes": _node_names(
+                        child,
+                        include_defaults=include_defaults,
+                        recursive=True,
+                    ),
+                }
+            )
+            walk(child, child_scope, child_local_path)
+
+    walk(graph.obj_dict, scope, base_path)
+    return occurrences
+
+
+def _build_group_rows(
+    occurrences: list[dict[str, Any]],
+) -> list[GroupMembership]:
+    """Aggregate raw occurrences into one row per logical group path."""
+    groups: dict[GroupPath, dict[str, Any]] = {}
+    group_order: dict[GroupPath, int] = {}
+
+    for occ in occurrences:
+        path = cast(GroupPath, occ["path"])
+        group = groups.get(path)
+        if group is None:
+            group = {
+                "path": path,
+                "name": occ["name"],
+                "kind": occ["kind"],
+                "scope": occ["scope"],
+                "depth": occ["depth"],
+                "occurrences": 0,
+                "members": set(),
+                "direct_members": set(),
+                "parent_path": occ["parent_path"],
+                "first_order": occ["order"],
+            }
+            groups[path] = group
+            group_order[path] = len(group_order)
+        group["occurrences"] += 1
+        group["members"].update(occ["tree_nodes"])
+        group["direct_members"].update(occ["direct_nodes"])
+
+    child_paths: dict[GroupPath, list[GroupPath]] = {
+        path: [] for path in groups
+    }
+    for path in groups:
+        parent_path = path[:-1]
+        if parent_path in groups:
+            child_paths[parent_path].append(path)
+
+    rows = []
+    for path, group in sorted(
+        groups.items(), key=lambda item: group_order[item[0]]
+    ):
+        row = GroupMembership(
+            {
+                "group": _group_id_from_path(path),
+                "group_id": _group_id_from_path(path),
+                "group_path": _group_id_from_path(path),
+                "path": path,
+                "name": group["name"],
+                "kind": group["kind"],
+                "scope": _group_id_from_path(
+                    cast(GroupPath, group["scope"])
+                ),
+                "depth": group["depth"],
+                "occurrences": group["occurrences"],
+                "members": sorted(group["members"]),
+                "direct_members": sorted(group["direct_members"]),
+                "parent": (
+                    _group_id_from_path(path[:-1])
+                    if path[:-1] in groups
+                    else None
+                ),
+                "children": [
+                    _group_id_from_path(child)
+                    for child in sorted(
+                        child_paths[path],
+                        key=lambda child: group_order[child],
+                    )
+                ],
+                "order": group["first_order"],
+            }
+        )
+        rows.append(row)
+    return rows
+
+
+def _build_membership_rows(
+    group_rows: list[GroupMembership], include_nested: bool = True
+) -> list[GroupMembership]:
+    """Flatten group rows into one dataset/group membership per row."""
+    rows: list[GroupMembership] = []
+    for group in group_rows:
+        direct = set(group["direct_members"])
+        members = (
+            group["members"] if include_nested else group["direct_members"]
+        )
+        for dataset in members:
+            rows.append(
+                GroupMembership(
+                    {
+                        "dataset": dataset,
+                        "group": group["group"],
+                        "path": group["path"],
+                        "name": group["name"],
+                        "kind": group["kind"],
+                        "scope": group["scope"],
+                        "depth": group["depth"],
+                        "direct": dataset in direct,
+                        "occurrences": group["occurrences"],
+                        "group_order": group["order"],
+                    }
+                )
+            )
+    return rows
+
+
+def _rows_to_jsonable(rows: list[GroupMembership]) -> list[dict[str, Any]]:
+    def normalize(value: Any) -> Any:
+        if isinstance(value, tuple):
+            return [normalize(item) for item in value]
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+
+    return [
+        {key: normalize(value) for key, value in row.items()}
+        for row in rows
+    ]
+
+
+class GroupMembership(dict):  # type: ignore[type-arg]
+    """A single dataset/group membership row.
+
+    Rows behave like dictionaries (``row["dataset"]``) and also expose
+    their fields as attributes (``row.dataset``).
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as err:
+            raise AttributeError(name) from err
+
+    def __repr__(self) -> str:
+        return f"GroupMembership({dict.__repr__(self)})"
+
+
+class GroupTable(list):  # type: ignore[type-arg]
+    """A list of group or membership rows with export helpers."""
+
+    def __init__(self, rows: Sequence[GroupMembership] = ()) -> None:
+        super().__init__(GroupMembership(row) for row in rows)
+
+    @property
+    def rows(self) -> list[GroupMembership]:
+        """The table rows as a plain list."""
+        return list(self)
+
+    @property
+    def fieldnames(self) -> list[str]:
+        """Column names, in the order of the first row."""
+        if not self:
+            return []
+        return list(self[0].keys())
+
+    def to_dicts(self) -> list[dict[str, Any]]:
+        """Return JSON-serializable copies of the rows."""
+        return _rows_to_jsonable(self)
+
+    def to_json(self, indent: int | None = 2) -> str:
+        """Serialize the table to JSON."""
+        return json.dumps(self.to_dicts(), indent=indent, ensure_ascii=False)
+
+    def to_csv(self, path: str | os.PathLike[str] | None = None) -> str:
+        """Serialize the table to CSV, optionally writing it to ``path``."""
+        output = io.StringIO()
+        fieldnames = self.fieldnames
+        if fieldnames:
+            writer = csv.DictWriter(
+                output, fieldnames=fieldnames, lineterminator="\n"
+            )
+            writer.writeheader()
+            for row in self.to_dicts():
+                writer.writerow(
+                    {
+                        key: (
+                            json.dumps(value, ensure_ascii=False)
+                            if isinstance(value, (list, dict))
+                            else value
+                        )
+                        for key, value in row.items()
+                    }
+                )
+        data = output.getvalue()
+        if path is not None:
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(data)
+        return data
+
+    def write_csv(self, path: str | os.PathLike[str]) -> None:
+        """Write the table to ``path`` as CSV."""
+        self.to_csv(path)
+
+    def write_json(
+        self, path: str | os.PathLike[str], indent: int | None = 2
+    ) -> None:
+        """Write the table to ``path`` as JSON."""
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(self.to_json(indent=indent))
+
+    def for_dataset(self, dataset: str) -> GroupTable:
+        """Rows for one dataset, in table order."""
+        return type(self)(row for row in self if row.get("dataset") == dataset)
+
+    def for_group(self, group: str) -> GroupTable:
+        """Rows for one group path, in table order."""
+        return type(self)(
+            row
+            for row in self
+            if row.get("group") == group or row.get("path") == group
+        )
+
+    def paths(self) -> list[str]:
+        """Distinct group path identifiers, in first-appearance order."""
+        result = []
+        for row in self:
+            group = row.get("group")
+            if group is not None and group not in result:
+                result.append(group)
+        return result
 
 
 class frozendict(FrozenDict):
@@ -402,7 +894,9 @@ def quote_attr_if_necessary(s: str) -> str:
     return make_quoted(s)
 
 
-def graph_from_dot_data(s: str) -> list[Dot] | None:
+def graph_from_dot_data(
+    s: str, path_scope: Sequence[object] | str | None = None
+) -> list[Dot] | None:
     """Load graphs from DOT description in string `s`.
 
     This function is NOT thread-safe due to the internal use of `pyparsing`.
@@ -411,16 +905,26 @@ def graph_from_dot_data(s: str) -> list[Dot] | None:
     @param s: string in [DOT language](
         https://en.wikipedia.org/wiki/DOT_(graph_description_language))
 
+    @param path_scope: optional import-side path scope.  It prefixes every
+        group path in the returned graphs, so identical short subgraph names
+        imported from different parents stay distinguishable.
+
     @return: Graphs that result from parsing.
     @rtype: `list` of `pydot.Dot`
     """
     import pydot.dot_parser
 
-    return pydot.dot_parser.parse_dot_data(s)
+    graphs = pydot.dot_parser.parse_dot_data(s)
+    if graphs and path_scope is not None:
+        for graph in graphs:
+            graph.set_group_scope(path_scope)
+    return graphs
 
 
 def graph_from_dot_file(
-    path: str | bytes, encoding: str | None = None
+    path: str | bytes,
+    encoding: str | None = None,
+    path_scope: Sequence[object] | str | None = None,
 ) -> list[Dot] | None:
     """Load graphs from DOT file at `path`.
 
@@ -430,14 +934,67 @@ def graph_from_dot_file(
     @param path: to DOT file
     @param encoding: as passed to `io.open`.
         For example, `'utf-8'`.
+    @param path_scope: optional import-side path scope.  It prefixes every
+        group path in the returned graphs.
 
     @return: Graphs that result from parsing.
     @rtype: `list` of `pydot.Dot`
     """
     with open(path, encoding=encoding) as f:
         s = f.read()
-    graphs = graph_from_dot_data(s)
+    graphs = graph_from_dot_data(s, path_scope=path_scope)
     return graphs
+
+
+def get_group_membership_table(
+    graph: Graph,
+    include_defaults: bool = False,
+    recursive: bool = True,
+    include_nested: bool = True,
+) -> GroupTable:
+    """Return a dataset/group membership table for ``graph``.
+
+    This is a module-level convenience wrapper around
+    ``Graph.get_membership_table`` for callers that only have a graph
+    object and do not want to remember the keyword defaults.
+    """
+    return graph.get_membership_table(
+        include_defaults=include_defaults,
+        recursive=recursive,
+        include_nested=include_nested,
+    )
+
+
+def get_group_table(
+    graph: Graph,
+    include_defaults: bool = False,
+    recursive: bool = True,
+) -> GroupTable:
+    """Return a logical group table for ``graph``."""
+    return graph.get_group_table(
+        include_defaults=include_defaults, recursive=recursive
+    )
+
+
+def export_group_membership(
+    graph: Graph,
+    path: str | os.PathLike[str],
+    format: str = "csv",
+    **table_kwargs: Any,
+) -> None:
+    """Write a membership table to ``path`` as CSV or JSON."""
+    table = graph.get_membership_table(**table_kwargs)
+    suffix = str(path).lower()
+    fmt = format.lower()
+    if fmt == "json" or (fmt == "auto" and suffix.endswith(".json")):
+        table.write_json(path)
+    elif fmt in ("csv", "auto"):
+        table.write_csv(path)
+    else:
+        raise pydot.Error(
+            f'Unsupported table format "{format}". '
+            "Accepted formats are: csv, json, auto"
+        )
 
 
 def graph_from_edges(
@@ -581,6 +1138,44 @@ class Common:
 
     def get_parent_graph(self) -> Graph | None:
         return cast("Graph", self.obj_dict.get("parent_graph", None))
+
+    def set_group_path(self, path: Sequence[object] | None) -> None:
+        """Pin this element to an explicit typed group path.
+
+        This is mainly useful when an importer already knows the full
+        directory path of the source data and two unrelated parents use
+        the same short subgraph name.
+        """
+        if path is None or path == "":
+            self.obj_dict.pop("group_path", None)
+            return
+        self.obj_dict["group_path"] = _coerce_group_path(path)
+
+    def get_group_path(self) -> GroupPath:
+        """Return the explicit group path, or the element's short name."""
+        raw = self.obj_dict.get("group_path")
+        if raw is not None:
+            return _coerce_group_path(raw)
+        name = self.obj_dict.get("name")
+        return (str(name),) if name else ()
+
+    set_path = set_group_path
+    get_path = get_group_path
+
+    def set_group_scope(self, scope: Sequence[object] | None) -> None:
+        """Declare the import-side path scope for this element."""
+        if scope is None or scope == "":
+            self.obj_dict.pop("group_scope", None)
+            return
+        self.obj_dict["group_scope"] = _coerce_group_path(scope)
+        self.obj_dict["group_scope_origin"] = "declared"
+
+    def get_group_scope(self) -> GroupPath:
+        """Return the declared import-side path scope, if any."""
+        return _group_scope_of(self)
+
+    set_path_scope = set_group_scope
+    get_path_scope = get_group_scope
 
     def get_top_graph_type(self, default: str = "graph") -> str:
         """Find the topmost parent graph type for the current object."""
@@ -1450,6 +2045,164 @@ class Graph(Common):
 
         return sgraph_objs
 
+    def _all_group_occurrences(
+        self, include_defaults: bool = False
+    ) -> list[dict[str, Any]]:
+        """Collect every subgraph occurrence in the whole hierarchy."""
+        top = _top_graph(self)
+        return _collect_group_occurrences(
+            top,
+            _group_scope_of(top),
+            (),
+            include_defaults=include_defaults,
+        )
+
+    def _subtree_occurrences(
+        self, include_defaults: bool = False
+    ) -> list[dict[str, Any]]:
+        """Collect occurrences for this object and everything below it."""
+        top = _top_graph(self)
+        occurrences = self._all_group_occurrences(include_defaults)
+        if self is top:
+            return occurrences
+
+        prefix = _structural_prefix(top, self)
+        selected = []
+        for occ in occurrences:
+            path = cast(GroupPath, occ["path"])
+            if occ["obj"] is self.obj_dict or (
+                len(path) > len(prefix) and path[: len(prefix)] == prefix
+            ):
+                selected.append(occ)
+        return selected
+
+    def get_group_table(
+        self, include_defaults: bool = False, recursive: bool = False
+    ) -> GroupTable:
+        """Return one row per logical subgraph/group path.
+
+        Named subgraphs that are reopened share one row: their nodes are
+        pooled under the same path.  Anonymous ``{ ... }`` blocks each
+        receive their own row, numbered by their ordinal among anonymous
+        siblings in the declaring graph.
+
+        ``include_defaults`` adds the ``graph``/``node``/``edge`` default
+        declaration pseudo-nodes as members.  With ``recursive``, the
+        table covers the whole hierarchy; otherwise it covers this object
+        and its descendants.  Paths are always absolute.
+        """
+        if recursive:
+            occurrences = self._all_group_occurrences(include_defaults)
+        else:
+            occurrences = self._subtree_occurrences(include_defaults)
+        return GroupTable(_build_group_rows(occurrences))
+
+    group_table = get_group_table
+
+    def get_membership_table(
+        self,
+        include_defaults: bool = False,
+        recursive: bool = False,
+        include_nested: bool = True,
+    ) -> GroupTable:
+        """Return a dataset-to-group membership table.
+
+        Every row names one dataset and the group path that contains it.
+        A dataset may belong to several groups; reopening a named group
+        yields additional rows, not a merged anonymous group.  When
+        ``include_nested`` is true, a dataset also appears under every
+        ancestor group path (membership is inherited), while
+        ``direct_members`` on the group table distinguishes direct
+        declarations.
+        """
+        groups = self.get_group_table(
+            include_defaults=include_defaults, recursive=recursive
+        )
+        return GroupTable(
+            _build_membership_rows(groups, include_nested=include_nested)
+        )
+
+    membership_table = get_membership_table
+
+    def get_group_occurrences(
+        self, include_defaults: bool = False
+    ) -> GroupTable:
+        """Return one row per subgraph occurrence, not per logical group.
+
+        Reopened named groups produce one row per block; the ``group``
+        column is shared between them.  Anonymous blocks each produce a
+        distinct group path.  This is the table to use when the export
+        must show which two DOT blocks belong to the same import path.
+        """
+        occurrences = self._all_group_occurrences(include_defaults)
+        rows = []
+        for occ in occurrences:
+            rows.append(
+                GroupMembership(
+                    {
+                        "group": _group_id_from_path(occ["path"]),
+                        "path": occ["path"],
+                        "name": occ["name"],
+                        "kind": occ["kind"],
+                        "scope": _group_id_from_path(occ["scope"]),
+                        "occurrence": occ["occurrence"],
+                        "depth": occ["depth"],
+                        "order": occ["order"],
+                        "parent": (
+                            _group_id_from_path(occ["parent_path"])
+                            if occ["parent_path"]
+                            else None
+                        ),
+                        "members": sorted(occ["direct_nodes"]),
+                        "nested_members": sorted(occ["tree_nodes"]),
+                    }
+                )
+            )
+        return GroupTable(rows)
+
+    group_occurrences = get_group_occurrences
+
+    def format_group_path(self, path: Sequence[object]) -> str:
+        """Render a typed group path (named parts and anonymous ordinals)."""
+        return format_group_path(_coerce_group_path(path))
+
+    def set_group_scope(self, scope: Sequence[object] | None) -> None:
+        """Declare the import-side path scope for this graph.
+
+        The scope prefixes every group path below the graph.  This keeps
+        identically short-named groups imported from different parents
+        distinguishable in tables and exports.
+        """
+        if scope is None or scope == "":
+            self.obj_dict.pop("group_scope", None)
+            return
+        self.obj_dict["group_scope"] = _coerce_group_path(scope)
+        self.obj_dict["group_scope_origin"] = "declared"
+
+    def find_groups(self, name: str) -> list[Subgraph]:
+        """Find all occurrences of a short subgraph name, at any depth."""
+        occurrences = self._all_group_occurrences()
+        return [
+            Subgraph(obj_dict=occ["obj"])
+            for occ in occurrences
+            if occ["name"] == name
+        ]
+
+    def get_group(self, path: str | Sequence[object]) -> list[Subgraph]:
+        """Find all subgraph occurrences that resolve to ``path``."""
+        target = _coerce_group_path(path)
+        occurrences = self._all_group_occurrences()
+        return [
+            Subgraph(obj_dict=occ["obj"])
+            for occ in occurrences
+            if occ["path"] == target
+            or _group_id_from_path(occ["path"]) == path
+        ]
+
+    def get_group_scope(self) -> GroupPath:
+        """Return the declared import-side path scope, if any."""
+        return _group_scope_of(self)
+
     def set_parent_graph(self, parent_graph: Common | None) -> None:
         self.obj_dict["parent_graph"] = parent_graph
 
@@ -1469,15 +2222,37 @@ class Graph(Common):
                 Graph(obj_dict=obj).set_parent_graph(parent_graph)
 
     def to_string(
-        self, indent: Any = "", indent_level: int = 0, inline: bool = False
+        self,
+        indent: Any = "",
+        indent_level: int = 0,
+        inline: bool = False,
+        show_group_paths: bool = False,
     ) -> str:
         """Return string representation of graph in DOT language.
 
-        @return: graph and subelements
-        @rtype: `str`
+        If ``show_group_paths`` is true, each subgraph is preceded by a
+        comment naming its full group path and, for reopened named
+        subgraphs, the occurrence number.  Two blocks with the same path
+        are therefore visibly instances of the same logical group, while
+        anonymous blocks keep distinct paths.
         """
         indent_str = self.get_indent(indent, indent_level)
         child_indent = self.get_indent(indent, indent_level + 1)
+
+        group_paths: dict[int, tuple[str, int, int]] = {}
+        if show_group_paths:
+            occurrences = self._all_group_occurrences()
+            for occ in occurrences:
+                tot = sum(
+                    1
+                    for other in occurrences
+                    if other["path"] == occ["path"]
+                )
+                group_paths[id(occ["obj"])] = (
+                    _group_id_from_path(occ["path"]),
+                    occ["occurrence"],
+                    tot,
+                )
 
         graph = []
 
@@ -1567,8 +2342,20 @@ class Graph(Common):
                 edges_done.add(edge)
 
             else:
+                if id(obj) in group_paths:
+                    path_id, occurrence, total = group_paths[id(obj)]
+                    if total > 1:
+                        annotation = (
+                            f"group-path: {path_id} "
+                            f"(occurrence {occurrence} of {total})"
+                        )
+                    else:
+                        annotation = f"group-path: {path_id}"
+                    graph.append(f"{child_indent}// {annotation}\n")
                 sgraph_str = Subgraph(obj_dict=obj).to_string(
-                    indent=indent, indent_level=indent_level + 1
+                    indent=indent,
+                    indent_level=indent_level + 1,
+                    show_group_paths=show_group_paths,
                 )
                 graph.append(f"{sgraph_str}")  # No newline, already present
 

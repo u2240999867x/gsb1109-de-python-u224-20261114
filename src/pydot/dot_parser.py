@@ -207,21 +207,26 @@ def push_node_id(toks: ParseResults) -> str:
     return ":".join(out)
 
 
-def push_graph_stmt(toks: ParseResults) -> pydot.core.Subgraph:
-    g = pydot.core.Subgraph("")
-    g.obj_dict["show_keyword"] = False
-    add_elements(g, toks)
-    return g
-
-
 def push_subgraph_stmt(toks: ParseResults) -> pydot.core.Subgraph:
     assert "keyword" in toks
     id_ = str(toks.id)
     show_kw = "keyword" in toks
     g = pydot.core.Subgraph(id_)
     g.obj_dict["show_keyword"] = show_kw
+    if not id_:
+        # An anonymous subgraph has no stable name of its own; its group
+        # path is derived from its position among anonymous siblings only.
+        g.obj_dict["anonymous"] = True
     if isinstance(toks.contents, ParseResults):  # pragma: no branch
         add_elements(g, toks.contents)
+    return g
+
+
+def push_graph_stmt(toks: ParseResults) -> pydot.core.Subgraph:
+    g = pydot.core.Subgraph("")
+    g.obj_dict["show_keyword"] = False
+    g.obj_dict["anonymous"] = True
+    add_elements(g, toks)
     return g
 
 

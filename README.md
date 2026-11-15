@@ -232,6 +232,52 @@ NetworkX has a conversion method for pydot graphs:
 my_networkx_graph = networkx.drawing.nx_pydot.from_pydot(graph)
 ```
 
+#### Inspect subgraph grouping
+
+Subgraphs are also used as dataset groups. Two DOT constructs look
+similar but mean different things:
+
+- Reopening a named subgraph (`subgraph cluster_ops { ... }` declared
+  twice) extends one logical group. Its members are pooled under one
+  path.
+- Each anonymous block (`{ ... }`) is a separate group. Anonymous paths
+  are numbered only against other anonymous siblings, so moving an
+  unrelated node or named subgraph does not change its members.
+
+```python
+graphs = pydot.graph_from_dot_file("datasets.dot", path_scope=["sales"])
+graph = graphs[0]
+
+# One row per dataset/group pair. A dataset may belong to several groups.
+membership = graph.get_membership_table()
+membership.for_dataset("orders")      # rows for one dataset
+membership.for_group("sales/ops")     # rows for one group path
+
+# One row per logical group path, with occurrence and member lists.
+groups = graph.get_group_table()
+
+# One row per DOT block, to tell which reopened blocks share a path.
+occurrences = graph.get_group_occurrences()
+
+membership.write_csv("membership.csv")
+membership.write_json("membership.json")
+```
+
+`path_scope` prefixes every group path with the import-side path, so a
+short `orders` group imported from `sales` and another `orders` imported
+from `ops` remain distinct: `sales/orders` versus `ops/orders`. The
+scope can also be set directly with `graph.set_group_scope(...)`, and an
+individual subgraph can be pinned with `subgraph.set_group_path(...)`.
+
+Table rows also carry the typed `path` tuple (named parts as strings,
+anonymous parts as integers) alongside the display `group` string.
+`direct` distinguishes datasets declared in the group itself from
+members inherited through nested subgraphs.
+
+For export, `graph.to_string(show_group_paths=True)` adds a
+`// group-path: ...` comment before each subgraph, including
+`(occurrence 1 of 2)` when a named group was reopened.
+
 ### More help
 
 For more help, see the docstrings of the various pydot objects and
