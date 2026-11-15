@@ -103,6 +103,31 @@ Cyclomatic Complexity
 
 .. autofunction:: sorted_results(blocks, order=SCORE)
 
+Top-K derivation from summaries
+-------------------------------
+
+.. py:module:: radon.topk
+    :synopsis: Derive project-wide top-K complexity tables from truncated
+        per-module summaries.
+
+.. autoclass:: ModuleSummary
+
+.. autoclass:: TopKAnalyzer
+
+.. autofunction:: summarize_blocks
+
+.. autofunction:: summarize_module
+
+.. autofunction:: summarize_file
+
+.. autofunction:: summarize_paths
+
+.. autofunction:: derive_top_k
+
+.. autofunction:: top_k_from_blocks
+
+.. autofunction:: top_k_from_paths
+
 Raw metrics
 -----------
 
