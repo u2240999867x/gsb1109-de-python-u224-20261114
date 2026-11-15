@@ -123,6 +123,40 @@ using a library that supports threads.
 Set threads to 0 to force xopen to use only the main Python thread.
 
 
+Reassembling lines from compressed shards
+-----------------------------------------
+
+Sometimes a UTF-8 encoded text has been cut into shards *at the byte level*
+and each shard was compressed on its own. The cuts may split a multibyte
+character or even a CRLF sequence across two adjacent shards, shards may be
+empty, and the stream may not end with a newline.
+
+``iter_logical_lines`` decompresses the shards in manifest order and yields
+the logical lines of the reconstructed stream as ``LogicalLine`` objects.
+Each line reports its one-based line number, its text (with universal newline
+translation, exactly as text-mode ``open`` would produce), its global byte
+offsets in the concatenated stream and the per-shard byte ranges
+(``ShardSpan`` with shard index and offsets into the decompressed shard) that
+contain its bytes::
+
+    from xopen import iter_logical_lines
+
+    with open("manifest.txt") as manifest:
+        shards = [line.strip() for line in manifest]
+    for line in iter_logical_lines(shards):
+        print(line.line_number, line.text.rstrip("\n"))
+        for span in line.spans:
+            print(f"  shard {span.shard}: bytes [{span.start}, {span.end})")
+
+The resulting line text and line numbers are identical to concatenating all
+decompressed bytes and reading them with ``open`` in text mode. Invalid UTF-8
+bytes are handled with ``surrogateescape`` (one character per source byte), so
+each bad byte is attributed only to the shard span that physically contains
+it. Use ``read_logical_lines`` to collect all lines eagerly. Shard sources may
+be paths or binary file-like objects, and the compression format can be
+forced with the ``format`` argument.
+
+
 Backends
 --------
 
@@ -190,6 +224,11 @@ Changelog
 development version
 ~~~~~~~~~~~~~~~~~~~
 
+* Added ``iter_logical_lines`` and ``read_logical_lines`` to reassemble
+  logical lines from independently compressed byte shards, including shards
+  whose cut points split multibyte characters or CRLF sequences, empty
+  shards and streams without a trailing newline. Each line reports the
+  contributing shards and their byte offsets.
 * #181/#168: Added lz4 as supported compression format.
   Contributed by @Dev-iL and @gnzsnz.
 * PipedCompressionReader no longer has seek/tell methods. This only worked

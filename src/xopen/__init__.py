@@ -5,6 +5,10 @@ Open compressed files transparently.
 __all__ = [
     "_PipedCompressionProgram",
     "__version__",
+    "LogicalLine",
+    "ShardSpan",
+    "iter_logical_lines",
+    "read_logical_lines",
     "xopen",
 ]
 
@@ -888,3 +892,12 @@ def xopen(
     if "t" in mode:
         return io.TextIOWrapper(opened_file, encoding, errors, newline)
     return opened_file
+
+
+# Imported last to avoid a circular import: xopen.shards uses xopen() itself.
+from .shards import (  # noqa: E402
+    LogicalLine,
+    ShardSpan,
+    iter_logical_lines,
+    read_logical_lines,
+)
