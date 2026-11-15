@@ -9,7 +9,15 @@ Pydot versions since 1.4.2 adhere to [PEP 440-style semantic versioning]
 4.0.2 (unreleased)
 ------------------
 
-- Nothing changed yet.
+Added:
+- Added `Graph.extract_subgraph()` and the `pydot.extract_subgraph()`
+  helper. They return a new graph containing only the original edges
+  that lie on a path from one of the given sources to one of the given
+  targets. Side branches that cannot reach a target and the parts of
+  feedback cycles that do not contribute to a target are removed.
+  Optional cutoff nodes act as audited boundaries: they are shown when
+  they terminate a retained edge, but edges leaving them are discarded
+  so that no path passes through them.
 
 
 4.0.1 (2025-06-17)

@@ -559,6 +559,109 @@ def graph_from_incidence_matrix(
     return graph
 
 
+def _node_identifier(value: Any) -> str:
+    """Normalize a node reference (a name or a `Node`) to a node ID."""
+    if isinstance(value, Node):
+        return str(value.get_name())
+    return str(value)
+
+
+def _walk(starts: set[str], neighbors: dict[str, list[str]]) -> set[str]:
+    """Collect nodes reachable from ``starts`` along ``neighbors``."""
+    seen = set(starts)
+    stack = list(starts)
+    while stack:
+        current = stack.pop()
+        for neighbor in neighbors.get(current, ()):
+            if neighbor not in seen:
+                seen.add(neighbor)
+                stack.append(neighbor)
+    return seen
+
+
+def _directed_core_nodes(
+    sources: set[str],
+    targets: set[str],
+    adjacency: dict[str, list[str]],
+    reverse: dict[str, list[str]],
+) -> set[str]:
+    """Non-cutoff nodes lying on a directed source-to-target path."""
+    forward = _walk(sources, adjacency)
+    backward = _walk(targets, reverse)
+    return forward & backward
+
+
+def _undirected_core_nodes(
+    sources: set[str],
+    targets: set[str],
+    neighbors: dict[str, list[str]],
+) -> set[str]:
+    """Non-cutoff nodes lying on an undirected source-to-target path.
+
+    Only connected components that contain both a source and a target
+    qualify; inside them, non-terminal leaves are peeled away so that
+    dead branches and detached cycles are discarded.
+    """
+    terminals = sources | targets
+    qualifying: set[str] = set()
+    unseen = set(neighbors) | terminals
+    while unseen:
+        start = unseen.pop()
+        component = _walk({start}, neighbors)
+        unseen -= component
+        if component & sources and component & targets:
+            qualifying |= component
+
+    degree = {
+        node: sum(
+            1 for other in neighbors.get(node, ()) if other in qualifying
+        )
+        for node in qualifying
+    }
+    leaves = [
+        node
+        for node, count in degree.items()
+        if count <= 1 and node not in terminals
+    ]
+    while leaves:
+        node = leaves.pop()
+        if node not in qualifying or node in terminals:
+            continue
+        qualifying.discard(node)
+        for other in neighbors.get(node, ()):
+            if other in qualifying:
+                degree[other] -= 1
+                if degree[other] <= 1 and other not in terminals:
+                    leaves.append(other)
+
+    return qualifying
+
+
+def extract_subgraph(
+    graph: Graph,
+    sources: Sequence[Any],
+    targets: Sequence[Any],
+    cutoff_nodes: Sequence[Any] | None = None,
+) -> Graph:
+    """Extract the edges that lie on a path from a source to a target.
+
+    Builds a small graph containing only the original edges that connect
+    one of the ``sources`` to one of the ``targets``. Side branches that
+    are reachable from a source but can never reach a target are removed,
+    and in case of feedback cycles only the parts that still contribute
+    to reaching a target are kept.
+
+    ``cutoff_nodes`` are audited boundary nodes: they may appear in the
+    result as a boundary, but no path is allowed to pass through them,
+    i.e. edges leaving a cutoff node are always discarded.
+
+    The input graph is not modified; a new graph of the same kind
+    (`Dot`, `Subgraph`, ...) and type is returned. This is a convenience
+    wrapper around `Graph.extract_subgraph`.
+    """
+    return graph.extract_subgraph(sources, targets, cutoff_nodes)
+
+
 class Common:
     """Common information to several classes.
 
@@ -1449,6 +1552,174 @@ class Graph(Common):
             )
 
         return sgraph_objs
+
+    def extract_subgraph(
+        self,
+        sources: Sequence[Any],
+        targets: Sequence[Any],
+        cutoff_nodes: Sequence[Any] | None = None,
+    ) -> Graph:
+        """Keep only the edges that connect a source to a target.
+
+        Returns a new graph containing the original edges that lie on at
+        least one directed path from one of the ``sources`` to one of the
+        ``targets``. The graph itself is left untouched.
+
+        - Branches reachable from a source but unable to reach any target
+          are removed.
+        - With feedback cycles, only the cycle portions that still
+          contribute to reaching a target are retained.
+        - Nodes listed in ``cutoff_nodes`` are audited boundary nodes:
+          they are kept when they end a retained edge, but edges leaving
+          them are discarded so that no path passes through them.
+
+        Node references may be given as names or `Node` instances. The
+        result is a graph of the same kind and type (directed or
+        undirected), preserving the original node and edge attributes
+        and their insertion order.
+        """
+        source_ids = {_node_identifier(node) for node in sources}
+        target_ids = {_node_identifier(node) for node in targets}
+        cutoff_ids = (
+            {_node_identifier(node) for node in cutoff_nodes}
+            if cutoff_nodes
+            else set()
+        )
+
+        directed = self.get_top_graph_type() == "digraph"
+
+        edges = self.get_edge_list()
+        all_nodes: set[str] = set(self.obj_dict["nodes"])
+        edge_endpoints: list[tuple[str, str]] = []
+
+        for edge in edges:
+            src = str(edge.get_source())
+            dst = str(edge.get_destination())
+            edge_endpoints.append((src, dst))
+            all_nodes.add(src)
+            all_nodes.add(dst)
+
+        unknown = (source_ids | target_ids | cutoff_ids) - all_nodes
+        if unknown:
+            raise pydot.Error(
+                "Unknown nodes referenced by extract_subgraph(): "
+                + ", ".join(sorted(unknown))
+            )
+
+        cutoff_set = set(cutoff_ids)
+        target_cutoffs = cutoff_set & target_ids
+        source_cutoffs = cutoff_set & source_ids
+        interior_sources = source_ids - cutoff_set
+        interior_targets = target_ids - cutoff_set
+
+        if directed:
+            core_adjacency: dict[str, list[str]] = {}
+            core_reverse: dict[str, list[str]] = {}
+            forward_seeds = set(interior_sources)
+            backward_seeds = set(interior_targets)
+            for src, dst in edge_endpoints:
+                if src in cutoff_set or dst in cutoff_set:
+                    if dst in target_cutoffs:
+                        backward_seeds.add(src)
+                    if src in source_cutoffs and dst not in cutoff_set:
+                        forward_seeds.add(dst)
+                    continue
+                core_adjacency.setdefault(src, []).append(dst)
+                core_reverse.setdefault(dst, []).append(src)
+            core = _directed_core_nodes(
+                forward_seeds,
+                backward_seeds,
+                core_adjacency,
+                core_reverse,
+            )
+        else:
+            core_neighbors: dict[str, list[str]] = {}
+            anchor_sources = set(interior_sources)
+            anchor_targets = set(interior_targets)
+            for src, dst in edge_endpoints:
+                if src in cutoff_set or dst in cutoff_set:
+                    if src in target_cutoffs or dst in target_cutoffs:
+                        anchor_targets.update(
+                            node
+                            for node in (src, dst)
+                            if node not in cutoff_set
+                        )
+                    if src in source_cutoffs or dst in source_cutoffs:
+                        anchor_sources.update(
+                            node
+                            for node in (src, dst)
+                            if node not in cutoff_set
+                        )
+                    continue
+                core_neighbors.setdefault(src, []).append(dst)
+                core_neighbors.setdefault(dst, []).append(src)
+            core = _undirected_core_nodes(
+                anchor_sources, anchor_targets, core_neighbors
+            )
+
+        result = type(self)(
+            graph_name="",
+            graph_type="digraph" if directed else "graph",
+            strict=self.get_strict(),
+            suppress_disconnected=self.obj_dict.get(
+                "suppress_disconnected", False
+            ),
+            simplify=self.get_simplify(),
+            **dict(self.obj_dict.get("attributes", {})),
+        )
+        original_name = self.get_name()
+        if original_name is not None:
+            result.set_name(original_name)
+
+        boundary_terminals = cutoff_set & (source_ids | target_ids)
+        kept_edges: list[Edge] = []
+        kept_node_ids: dict[str, None] = {}
+
+        for edge, (src, dst) in zip(edges, edge_endpoints):
+            keep = False
+            if src in core and dst in core:
+                keep = True
+            elif directed:
+                if src in core and dst in target_cutoffs:
+                    keep = True
+                elif src in source_cutoffs and dst in core:
+                    keep = True
+                elif src in source_cutoffs and dst in target_cutoffs:
+                    keep = True
+            elif (
+                src in core
+                and dst in boundary_terminals
+                or dst in core
+                and src in boundary_terminals
+                or src in boundary_terminals
+                and dst in boundary_terminals
+            ):
+                keep = True
+
+            if keep:
+                kept_edges.append(Edge(obj_dict=edge.obj_dict))
+                kept_node_ids[src] = None
+                kept_node_ids[dst] = None
+
+        explicit_nodes = {
+            node.get_name(): node.obj_dict for node in self.get_node_list()
+        }
+
+        for default_name in ("graph", "node", "edge"):
+            if default_name in explicit_nodes:
+                result.add_node(Node(obj_dict=explicit_nodes[default_name]))
+
+        for name in kept_node_ids:
+            node_obj = explicit_nodes.get(name)
+            if node_obj is not None:
+                result.add_node(Node(obj_dict=node_obj))
+            else:
+                result.add_node(Node(name))
+
+        for edge in kept_edges:
+            result.add_edge(edge)
+
+        return result
 
     def set_parent_graph(self, parent_graph: Common | None) -> None:
         self.obj_dict["parent_graph"] = parent_graph
