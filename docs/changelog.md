@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add `installer.reconcile`, an offline installation ledger that distinguishes
+  verbatim copies, shebang rewrites, generated launchers/RECORD and unknown
+  files while retaining digests and byte-level evidence for both sides.
+
 ## v1.1.0 (Oct 12, 2026)
 - Add early return when there are no optimization levels to compile bytecode for (#341)
 - Avoid building a `pathlib.Path` object for each record entry (#342)
