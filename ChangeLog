@@ -9,7 +9,15 @@ Pydot versions since 1.4.2 adhere to [PEP 440-style semantic versioning]
 4.0.2 (unreleased)
 ------------------
 
-- Nothing changed yet.
+Added:
+- Strict graphs now merge repeated declarations of the same edge.
+  When parsing strict DOT, declaring an already-present connection
+  overlays the new attributes onto the existing edge instead of adding
+  a parallel edge. Undirected graphs match endpoints in either order;
+  directed graphs only match the same ordered pair. Non-strict graphs
+  keep independent edges as before.
+- Added `Common.get_attribute_sources()`, returning for each attribute
+  the 1-based number of the declaration that last set its value.
 
 
 4.0.1 (2025-06-17)

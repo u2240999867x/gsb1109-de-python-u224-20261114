@@ -627,6 +627,20 @@ class Common:
         """Get attributes of the object"""
         return cast(AttributeDict, self.obj_dict.get("attributes", {}))
 
+    def get_attribute_sources(self) -> dict[str, int]:
+        """Get which declaration provided each attribute's value.
+
+        Returns a dict mapping each attribute name to the 1-based
+        number of the declaration that last set its value. Attributes
+        set by the first (or only) declaration of the element map to 1.
+        In strict graphs, where repeated declarations of the same edge
+        are merged, attributes carried over from a later declaration
+        map to that declaration's number.
+        """
+        sources = dict.fromkeys(self.obj_dict.get("attributes", {}), 1)
+        sources.update(self.obj_dict.get("attribute_sources", {}))
+        return sources
+
     def set_sequence(self, seq: int) -> None:
         """Set sequence"""
         self.obj_dict["sequence"] = seq
@@ -1274,6 +1288,13 @@ class Graph(Common):
 
         It takes an edge object as its only argument and returns
         None.
+
+        In strict graphs, declaring an edge that is already present
+        does not add a parallel edge: the attributes of the new
+        declaration are merged into the existing edge instead. Two
+        declarations are considered the same edge when their endpoints
+        match, in either order for undirected graphs and only in the
+        same order for directed graphs.
         """
         if not isinstance(graph_edge, Edge):
             raise TypeError(
@@ -1283,6 +1304,11 @@ class Graph(Common):
 
         edge_points = (graph_edge.get_source(), graph_edge.get_destination())
 
+        if self.get_strict() and self._merge_strict_edge(
+            edge_points, graph_edge
+        ):
+            return
+
         if edge_points in self.obj_dict["edges"]:
             edge_list = self.obj_dict["edges"][edge_points]
             edge_list.append(graph_edge.obj_dict)
@@ -1291,6 +1317,40 @@ class Graph(Common):
 
         graph_edge.set_sequence(self.get_next_sequence_number())
         graph_edge.set_parent_graph(self.get_parent_graph())
+
+    def _merge_strict_edge(
+        self, edge_points: tuple[Any, Any], graph_edge: Edge
+    ) -> bool:
+        """Merge a repeated edge declaration in a strict graph.
+
+        Looks up an existing edge for `edge_points`, honoring the
+        graph type: undirected graphs also match the reversed
+        endpoints. When found, the attributes of `graph_edge` are
+        overlaid onto the existing edge and each overlaid value is
+        recorded as coming from this new declaration. Returns True
+        when a merge happened, False when no matching edge exists.
+        """
+        edges = self.obj_dict["edges"]
+
+        key = None
+        if edge_points in edges:
+            key = edge_points
+        elif self.get_top_graph_type() == "graph":
+            reversed_points = (edge_points[1], edge_points[0])
+            if reversed_points in edges:
+                key = reversed_points
+
+        if key is None:
+            return False
+
+        target = edges[key][0]
+        declaration = int(target.get("declaration_count", 1)) + 1
+        target["declaration_count"] = declaration
+        sources = target.setdefault("attribute_sources", {})
+        for name, value in graph_edge.obj_dict["attributes"].items():
+            target["attributes"][name] = value
+            sources[name] = declaration
+        return True
 
     def del_edge(
         self, src_or_list: Any, dst: Any = None, index: int | None = None

@@ -222,6 +222,74 @@ def test_strict_graph_parsing() -> None:
     assert res2[1].get_strict()
 
 
+def test_strict_graph_merges_repeated_edge_declarations() -> None:
+    """In a strict graph, repeated declarations of the same edge merge."""
+    (graph,) = dot_parser.parse_dot_data(
+        "strict graph G { a -- b [color=red]; a -- b [owner=alice]; }"
+    )
+    edges = graph.get_edges()
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge.get_attributes() == {"color": "red", "owner": "alice"}
+    assert edge.get_attribute_sources() == {"color": 1, "owner": 2}
+
+
+def test_strict_graph_later_declaration_overrides_attribute() -> None:
+    """A later declaration of the same strict edge overrides values."""
+    (graph,) = dot_parser.parse_dot_data(
+        "strict graph G { a -- b [color=red]; a -- b [color=blue]; }"
+    )
+    (edge,) = graph.get_edges()
+    assert edge.get("color") == "blue"
+    assert edge.get_attribute_sources() == {"color": 2}
+
+
+def test_strict_undirected_graph_matches_reversed_endpoints() -> None:
+    """In an undirected strict graph, reversed endpoints hit the same edge."""
+    (graph,) = dot_parser.parse_dot_data(
+        "strict graph G { a -- b [color=red]; b -- a [owner=alice]; }"
+    )
+    edges = graph.get_edges()
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge.get_attributes() == {"color": "red", "owner": "alice"}
+    assert edge.get_attribute_sources() == {"color": 1, "owner": 2}
+    # The merged edge is found from either direction.
+    assert graph.get_edge("a", "b") == graph.get_edge("b", "a")
+
+
+def test_strict_digraph_keeps_opposite_directions_separate() -> None:
+    """In a strict digraph, a -> b and b -> a remain two edges."""
+    (graph,) = dot_parser.parse_dot_data(
+        "strict digraph G { a -> b [color=red]; b -> a [owner=alice]; }"
+    )
+    edges = graph.get_edges()
+    assert len(edges) == 2
+    (forward,) = graph.get_edge("a", "b")
+    (backward,) = graph.get_edge("b", "a")
+    assert forward.get_attributes() == {"color": "red"}
+    assert backward.get_attributes() == {"owner": "alice"}
+    # But repeating the same directed edge still merges.
+    (graph2,) = dot_parser.parse_dot_data(
+        "strict digraph G { a -> b [color=red]; a -> b [owner=alice]; }"
+    )
+    (edge,) = graph2.get_edges()
+    assert edge.get_attributes() == {"color": "red", "owner": "alice"}
+
+
+def test_non_strict_graph_keeps_parallel_edges() -> None:
+    """Without 'strict', repeated declarations stay separate edges."""
+    (graph,) = dot_parser.parse_dot_data(
+        "graph G { a -- b [color=red]; a -- b [owner=alice]; }"
+    )
+    edges = graph.get_edges()
+    assert len(edges) == 2
+    assert edges[0].get_attributes() == {"color": "red"}
+    assert edges[1].get_attributes() == {"owner": "alice"}
+    assert edges[0].get_attribute_sources() == {"color": 1}
+    assert edges[1].get_attribute_sources() == {"owner": 1}
+
+
 def test_backslash_continuations() -> None:
     src = textwrap.dedent(r"""
         graph G {
