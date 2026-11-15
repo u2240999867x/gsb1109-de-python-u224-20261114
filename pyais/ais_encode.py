@@ -68,6 +68,8 @@ KNOWN_FIELDS = {
     'band', 'cs', 'quiet', 'retransmit',
     'status', 'course', 'shipname', 'dte',
     'interval', 'to_bow', 'draught',
+    # keys of a re-exported application data record
+    'bit_count', 'raw',
 }
 
 

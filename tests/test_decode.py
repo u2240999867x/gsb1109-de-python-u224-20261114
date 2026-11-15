@@ -1762,7 +1762,10 @@ class TestAIS(unittest.TestCase):
             "retransmit": false,
             "dac": 669,
             "fid": 11,
-            "data": "6y8Rj3/x"
+            "data": {
+                "bit_count": 48,
+                "raw": "6y8Rj3/x"
+            }
         }
         """
             ).strip(),
@@ -1782,7 +1785,10 @@ class TestAIS(unittest.TestCase):
             "mmsi": 366999712,
             "dac": 366,
             "fid": 56,
-            "data": "OlPbt75KdzE3+H17BEXwQN6gXZP1k3gxlK6bnZ2+Bfs="
+            "data": {
+                "bit_count": 256,
+                "raw": "OlPbt75KdzE3+H17BEXwQN6gXZP1k3gxlK6bnZ2+Bfs="
+            }
         }
         """
             ).strip(),

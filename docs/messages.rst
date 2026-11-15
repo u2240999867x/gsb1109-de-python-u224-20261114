@@ -189,9 +189,31 @@ Accessing the raw payload of an unknown subtype:
    from pyais import decode
 
    msg = decode(b"!AIVDM,1,1,,B,6B?n;be:cbapalgc;i6?Ow4,2*4A")
-   print(msg.dac)       # 669
-   print(msg.fid)       # 11
-   print(msg.data)      # b'\xeb/\x11\x8f\x7f\xf1' (raw bytes)
+   print(msg.dac)              # 669
+   print(msg.fid)              # 11
+   print(msg.data)             # b'\xeb/\x11\x8f\x7f\xf1' (raw bytes)
+   print(msg.data.bit_count)   # 48 (number of valid bits)
+
+The raw payload of an unknown subtype is stored as an
+``ApplicationData`` record. It behaves like plain ``bytes``, but
+additionally carries the number of valid bits (``bit_count``). The raw
+content is left-aligned and padded with zero bits up to a full byte, so
+the bit count is required to tell genuine trailing zero bits apart from
+padding bits. Together with ``dac`` and ``fid`` this makes the record
+re-exportable: re-encoding it reproduces the exact same bit string, even
+for applications this version of the library does not know.
+
+.. code-block:: python
+
+   import json
+   from pyais import decode, encode_dict
+
+   msg = decode(b"!AIVDM,1,1,,B,6B?n;be:cbapalgc;i6?Ow4,2*4A")
+   exported = json.loads(msg.to_json())
+   print(exported["data"])     # {'bit_count': 48, 'raw': '6y8Rj3/x'}
+
+   # re-encoding yields the same bit string (fragmentation may differ)
+   sentences = encode_dict(exported)
 
 Message type 8 — Binary Broadcast Message
 ------------------------------------------

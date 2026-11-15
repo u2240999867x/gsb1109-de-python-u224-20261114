@@ -334,6 +334,9 @@ def b64encode_str(val: bytes, encoding: str = 'utf-8') -> str:
 def coerce_val(val: typing.Any, d_type: typing.Type[T]) -> T:
     """Forces a given value in a given datatype"""
     if d_type == bytes and not isinstance(val, bytes):
+        if isinstance(val, str):
+            # BASE64 encoded bytes, e.g. taken from a JSON export
+            return base64.b64decode(val)  # type: ignore
         raise ValueError(f"Expected bytes, but got: {type(val)}")
 
     return d_type(val)  # type: ignore

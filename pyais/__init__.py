@@ -1,5 +1,5 @@
 from pyais.bit_vector import bit_vector
-from pyais.messages import NMEAMessage, ANY_MESSAGE, AISSentence, TagBlock
+from pyais.messages import NMEAMessage, ANY_MESSAGE, AISSentence, TagBlock, ApplicationData
 from pyais.stream import TCPConnection, FileReaderStream, IterMessages, Stream, PreprocessorProtocol
 from pyais.encode import encode_dict, encode_msg, ais_to_nmea_0183
 from pyais.decode import decode
@@ -18,6 +18,7 @@ __all__ = (
     'AISSentence',
     'TagBlock',
     'ANY_MESSAGE',
+    'ApplicationData',
     'TCPConnection',
     'IterMessages',
     'FileReaderStream',

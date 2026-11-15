@@ -4,6 +4,7 @@ import functools
 import json
 import math
 import typing
+from base64 import b64decode
 from typing import Any, Dict, Optional, Sequence, Union
 
 import attr
@@ -38,7 +39,7 @@ from pyais.util import SIX_BIT_ENCODING, ParsedDimensions, SixBitNibleEncoder, c
 NMEA_VALUE = typing.Union[str, float, int, bool, bytes]
 _ConverterFunc = typing.Callable[[NMEA_VALUE,], NMEA_VALUE]
 _DecoderPlan = list[tuple[str, int, int, bool, int, _ConverterFunc]]
-INT, BOOL, FLOAT, STR, BYTES = 0, 1, 2, 3, 4
+INT, BOOL, FLOAT, STR, BYTES, APP_DATA = 0, 1, 2, 3, 4, 5
 
 B_EXCLAMATION_MARK = b"!"
 B_DOLLAR_SIGN = b"$"
@@ -102,6 +103,7 @@ def bit_field(
     variable_length: bool = False,
     is_spare: bool = False,
     bit_unit: typing.Optional[int] = None,
+    keep_bit_count: bool = False,
     **kwargs: typing.Any
 ) -> typing.Any:
     """
@@ -114,6 +116,8 @@ def bit_field(
     @param default:             Optional default value to be used when no value is explicitly passed.
     @param signed:              Set to true if the value is a signed integer
     @param variable_length:     Set to true, if the field can be shorter than width (e.g. for binary data/text)
+    @param keep_bit_count:      Set to true, if the exact number of valid bits of a bytes field
+                                needs to be preserved (e.g. for raw application data)
     @return:                    An attr.ib field instance.
     """
     return attr.ib(
@@ -127,6 +131,7 @@ def bit_field(
             'variable_length': variable_length,
             'is_spare': is_spare,
             'bit_unit': bit_unit,
+            'keep_bit_count': keep_bit_count,
         },
         **kwargs
     )
@@ -135,10 +140,59 @@ def bit_field(
 ENUM_FIELDS = {'status', 'maneuver', 'epfd', 'ship_type', 'aid_type', 'station_type', 'txrx', 'interval'}
 
 
+class ApplicationData(bytes):
+    """
+    Raw application-specific data of a binary AIS message (types 6 and 8).
+
+    The object behaves like plain ``bytes`` for backwards compatibility, but
+    additionally carries the number of valid bits (``bit_count``). The raw
+    content is stored left-aligned and padded with zero bits up to a full
+    byte. Without the bit count, genuine trailing zero bits could not be told
+    apart from padding bits and re-encoding would not reproduce the original
+    bit string.
+    """
+
+    bit_count: int
+
+    def __new__(cls, data: bytes = b"", bit_count: typing.Optional[int] = None) -> "ApplicationData":
+        if isinstance(data, ApplicationData) and bit_count is None:
+            return data
+        obj = super().__new__(cls, data)
+        if bit_count is None:
+            bit_count = len(obj) * 8
+        bit_count = int(bit_count)
+        if not 0 <= bit_count <= len(obj) * 8:
+            raise ValueError(f"bit_count of {bit_count} does not fit into {len(obj)} bytes")
+        obj.bit_count = bit_count
+        return obj
+
+    @property
+    def padding_bits(self) -> int:
+        """Number of zero bits appended to fill up the last byte (0-7)."""
+        return len(self) * 8 - self.bit_count
+
+    def as_record(self) -> typing.Dict[str, typing.Union[int, str]]:
+        """Return a re-exportable record of the valid bit count and the raw content."""
+        return {"bit_count": self.bit_count, "raw": b64encode_str(self)}
+
+    @classmethod
+    def from_record(cls, record: typing.Mapping[str, typing.Any]) -> "ApplicationData":
+        """Rebuild application data from a record created by `as_record`."""
+        raw = record.get("raw", record.get("data", b""))
+        if raw is None:
+            raw = b""
+        if isinstance(raw, str):
+            raw = b64decode(raw)
+        return cls(raw, record.get("bit_count"))
+
+
 class AISJSONEncoder(json.JSONEncoder):
     """Custom JSON encoder to handle bytes objects"""
 
     def default(self, o: typing.Any) -> typing.Any:
+        if isinstance(o, ApplicationData):
+            # Re-exportable record: valid bit count plus raw content
+            return o.as_record()
         if isinstance(o, bytes):
             return b64encode_str(o)
         return json.JSONEncoder.default(self, o)
@@ -843,6 +897,10 @@ class Payload(abc.ABC):
             # The value is already of the correct type -> nothing to do
             return val
 
+        if d_type is bytes and isinstance(val, dict):
+            # A re-exported application data record (see ApplicationData.as_record)
+            return ApplicationData.from_record(val)
+
         try:
             coerced_val = coerce_val(val, d_type)
         except ValueError as err:
@@ -909,7 +967,8 @@ class Payload(abc.ABC):
                     bit_buffer = (bit_buffer << width)
                     bits_in_buffer += width
                 else:
-                    required_bits = min(width, len(val) * 8)
+                    bit_count = getattr(val, 'bit_count', None)
+                    required_bits = min(width, bit_count if bit_count is not None else len(val) * 8)
                     # Ensure bytes to not overflow a bit-length that isn't a multiple of 8
                     bit_unit = field.metadata.get('bit_unit')
                     if bit_unit:
@@ -987,7 +1046,7 @@ class Payload(abc.ABC):
             elif d_type is str:
                 kind = STR
             elif d_type is bytes:
-                kind = BYTES
+                kind = APP_DATA if md.get('keep_bit_count') else BYTES
             else:
                 raise InvalidDataTypeException(d_type)
             signed = md['signed']
@@ -1072,6 +1131,10 @@ class Payload(abc.ABC):
                 val = bool(get_num(offset, width, signed))
             elif kind == STR:
                 val = get_str(offset, width)
+            elif kind == APP_DATA:
+                # Raw application data: keep the exact number of valid bits,
+                # so that re-encoding reproduces the original bit string
+                val = ApplicationData(get_bytes(offset, width), min(width, bv_len - offset))
             else:
                 val = get_bytes(offset, width)
 
@@ -2245,7 +2308,7 @@ class MessageType6Default(Payload):
     spare_1 = bit_field(1, bytes, default=b'', is_spare=True)
     dac = bit_field(10, int, default=0, signed=False)
     fid = bit_field(6, int, default=0, signed=False)
-    data = bit_field(920, bytes, default=b'', variable_length=True)
+    data = bit_field(920, bytes, default=b'', variable_length=True, keep_bit_count=True)
 
 
 @attr.s(slots=True)
@@ -2528,7 +2591,7 @@ class MessageType8Default(Payload):
     spare_1 = bit_field(2, bytes, default=b"", is_spare=True)
     dac = bit_field(10, int, default=0, signed=False)
     fid = bit_field(6, int, default=0, signed=False)
-    data = bit_field(952, bytes, default=b"", variable_length=True)
+    data = bit_field(952, bytes, default=b"", variable_length=True, keep_bit_count=True)
 
 
 @attr.s(slots=True)
