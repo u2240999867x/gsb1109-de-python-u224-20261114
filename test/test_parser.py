@@ -366,3 +366,122 @@ def test_comments_are_discarded() -> None:
         'b -- "/* node */ c";\n'
         "}\n"
     )
+
+
+def test_subgraph_endpoints_expand_adjacent_segments() -> None:
+    (graph,) = dot_parser.parse_dot_data("digraph { {A B} -> {C D} -> E }")
+    rows = graph.get_lineage_edges()
+
+    assert [(e.get_source(), e.get_destination()) for e in rows] == [
+        ("A", "C"),
+        ("A", "D"),
+        ("B", "C"),
+        ("B", "D"),
+        ("C", "E"),
+        ("D", "E"),
+    ]
+    assert graph.get_edge("A", "E") == []
+
+
+def test_subgraph_endpoint_rows_keep_declaration_and_segment() -> None:
+    src = "digraph {\n  // exchange row\n  {A B} -> {C D} -> E;\n}"
+    (graph,) = dot_parser.parse_dot_data(src)
+    rows = graph.get_lineage_edges()
+
+    assert {row.get_declaration() for row in rows} == {
+        "{A B} -> {C D} -> E"
+    }
+    assert [row.get_segment() for row in rows] == [1, 1, 1, 1, 2, 2]
+    assert {row.get_lineage()["segment_count"] for row in rows} == {2}
+    assert {row.get_lineage()["line"] for row in rows} == {3}
+
+
+def test_expanded_rows_do_not_share_attribute_dicts() -> None:
+    (graph,) = dot_parser.parse_dot_data(
+        "digraph { {A B} -> {C D} [color=red] }"
+    )
+    rows = graph.get_lineage_edges()
+    assert len(rows) == 4
+    assert rows[0].get_attributes() is not rows[1].get_attributes()
+    rows[0].set("color", "blue")
+    assert rows[1].get("color") == "red"
+    assert rows[0].get_top_graph_type() == "digraph"
+
+
+def test_nested_subgraph_edges_keep_their_own_provenance() -> None:
+    src = "digraph { {a -> b; c} -> d }"
+    (graph,) = dot_parser.parse_dot_data(src)
+    rows = graph.get_lineage_edges()
+
+    by_pair = {
+        (row.get_source(), row.get_destination()): row for row in rows
+    }
+    internal = by_pair[("a", "b")]
+    outer = by_pair[("a", "d")]
+
+    assert internal.get_declaration() == "a -> b"
+    assert internal.get_segment() == 1
+    assert outer.get_declaration() == "{a -> b; c} -> d"
+    assert outer.get_segment() == 1
+    assert len(rows) == 4
+
+
+def test_shared_subgraph_nodes_follow_graph_conventions() -> None:
+    (graph,) = dot_parser.parse_dot_data(
+        "digraph { {A B} -> {B C} }"
+    )
+    pairs = [
+        (row.get_source(), row.get_destination())
+        for row in graph.get_lineage_edges()
+    ]
+    assert pairs == [
+        ("A", "B"),
+        ("A", "C"),
+        ("B", "B"),
+        ("B", "C"),
+    ]
+
+    (strict_graph,) = dot_parser.parse_dot_data(
+        "strict graph { {A B} -> {A B} }"
+    )
+    assert {
+        (row.get_source(), row.get_destination())
+        for row in strict_graph.get_lineage_edges()
+    } == {("A", "A"), ("A", "B"), ("B", "B")}
+
+
+def test_graph_lineage_table_is_serializable_and_ordered() -> None:
+    src = "digraph {\n  subgraph S { x -> y }\n  {a -> b; c} -> d\n}"
+    (graph,) = dot_parser.parse_dot_data(src)
+
+    table = graph.get_lineage()
+
+    assert list(table[0]) == [
+        "source",
+        "destination",
+        "declaration",
+        "source_line",
+        "segment",
+        "segment_count",
+        "line",
+        "column",
+    ]
+    assert [(row["source"], row["destination"]) for row in table] == [
+        ("x", "y"),
+        ("a", "d"),
+        ("b", "d"),
+        ("c", "d"),
+        ("a", "b"),
+    ]
+    assert table[-1]["declaration"] == "a -> b"
+    assert table[0]["source_line"] == "  subgraph S { x -> y }"
+
+
+def test_subgraph_defaults_are_not_lineage_members() -> None:
+    (graph,) = dot_parser.parse_dot_data(
+        "digraph { { node [shape=box]; graph [rank=same]; A; B } -> C }"
+    )
+    assert [
+        (row.get_source(), row.get_destination())
+        for row in graph.get_lineage_edges()
+    ] == [("A", "C"), ("B", "C")]

@@ -141,6 +141,35 @@ import pydot
 graph = networkx.drawing.nx_pydot.to_pydot(my_networkx_graph)
 ```
 
+#### Inspect table-level lineage for subgraph endpoints
+
+A single DOT edge statement may use subgraph endpoints, for example
+`{A B} -> {C D} -> E`. `Graph.get_edges()` keeps that statement as the
+two edge objects Graphviz stores, while `Graph.get_lineage_edges()`
+expands it into one row per adjacent endpoint pair:
+
+```python
+import pydot
+
+graphs = pydot.graph_from_dot_data("digraph { {A B} -> {C D} -> E }")
+graph = graphs[0]
+
+for edge in graph.get_lineage_edges():
+    print(edge.get_source(), "->", edge.get_destination(), edge.get_lineage())
+# A -> C {'segment': 1, 'segment_count': 2, 'declaration': ...}
+# A -> D ...
+# B -> C ...
+# B -> D ...
+# C -> E {'segment': 2, ...}
+# D -> E ...
+```
+
+Each row's `lineage` entry carries the original declaration, its 1-based
+segment number and count, and the declaration's line and column. Internal
+edges declared inside a subgraph endpoint are included with their own
+declaration and segment number. `Graph.get_lineage()` returns the same rows
+as plain dictionaries, suitable for writing to a table or JSON.
+
 ### 2. Edit
 
 You can now further manipulate your graph using pydot methods:

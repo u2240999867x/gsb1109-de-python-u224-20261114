@@ -9,6 +9,14 @@ Pydot versions since 1.4.2 adhere to [PEP 440-style semantic versioning]
 4.0.2 (unreleased)
 ------------------
 
+Added:
+- Table-level lineage for subgraph edge endpoints.
+  `Graph.get_lineage_edges()` expands statements such as
+  `{A B} -> {C D} -> E` into one row per adjacent endpoint pair, keeping
+  the original declaration and segment number on every row. Internal
+  subgraph edges keep their own provenance, and `Graph.get_lineage()`
+  returns serializable row dictionaries. `Graph.get_edges()` is unchanged.
+
 - Nothing changed yet.
 
 

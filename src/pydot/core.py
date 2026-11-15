@@ -854,6 +854,34 @@ class Edge(Common):
         """Get the edge's destination endpoint."""
         return self._get_endpoint(1)
 
+    def get_lineage(self) -> dict[str, Any]:
+        """Get this edge's lineage provenance, if any.
+
+        Parsed edges carry the original DOT declaration, the 1-based
+        segment number within that declaration, the total segment count,
+        and the declaration's line and column.
+        """
+        lineage = self.obj_dict.get("lineage")
+        if isinstance(lineage, FrozenDict):
+            return dict(lineage)
+        if isinstance(lineage, dict):
+            return dict(lineage)
+        return {}
+
+    def get_declaration(self) -> str | None:
+        """Get the original declaration text for this edge."""
+        declaration = self.get_lineage().get("declaration")
+        return None if declaration is None else str(declaration)
+
+    def get_segment(self) -> int | None:
+        """Get the 1-based segment number for this edge."""
+        segment = self.get_lineage().get("segment")
+        return None if segment is None else int(segment)
+
+    def get_segment_number(self) -> int | None:
+        """Alias for :meth:`get_segment`."""
+        return self.get_segment()
+
     def __hash__(self) -> int:
         return hash(hash(self.get_source()) + hash(self.get_destination()))
 
@@ -957,6 +985,157 @@ class Edge(Common):
 
 
 __generate_attribute_methods(Edge, EDGE_ATTRIBUTES)
+
+
+def _endpoint_label(endpoint: EdgeEndpoint) -> str:
+    """Return a printable identifier for an edge endpoint."""
+    if not isinstance(endpoint, FrozenDict):
+        return str(endpoint)
+
+    subgraph = Subgraph(obj_dict=endpoint)
+    name = subgraph.get_name()
+    if name:
+        return str(name)
+    return (
+        "{"
+        + " ".join(_endpoint_label(m) for m in _subgraph_members(endpoint))
+        + "}"
+    )
+
+
+def _subgraph_members(endpoint: Any) -> list[EdgeEndpoint]:
+    """Return the concrete node endpoints contained in a subgraph endpoint.
+
+    Every node declared by the subgraph, every node referenced by its
+    internal edges, and every member of its nested subgraphs is included
+    once, ordered by declaration sequence. Default attribute statements
+    (`graph`, `node`, `edge`) are not members.
+    """
+    if not isinstance(endpoint, FrozenDict):
+        return [endpoint]
+
+    subgraph = Subgraph(obj_dict=endpoint)
+    ordered: list[tuple[int, EdgeEndpoint]] = []
+
+    for node in subgraph.get_nodes():
+        name = node.get_name()
+        if name.lower() in ("graph", "node", "edge"):
+            continue
+        ordered.append((node.get_sequence() or 0, name))
+
+    for edge in subgraph.get_edges():
+        for member in (edge.get_source(), edge.get_destination()):
+            ordered.append((edge.get_sequence() or 0, member))
+
+    for nested in subgraph.get_subgraphs():
+        ordered.append(
+            (nested.get_sequence() or 0, FrozenDict(nested.obj_dict))
+        )
+
+    ordered.sort(key=lambda item: item[0])
+
+    members: list[EdgeEndpoint] = []
+    for _, member in ordered:
+        candidates = (
+            _subgraph_members(member)
+            if isinstance(member, FrozenDict)
+            else [member]
+        )
+        for candidate in candidates:
+            if candidate not in members:
+                members.append(candidate)
+    return members
+
+
+def _lineage_row_dict(
+    edge: Edge, source: EdgeEndpoint, destination: EdgeEndpoint
+) -> AttributeDict:
+    """Build the object dictionary for one expanded lineage row.
+
+    Attribute dictionaries are copied so rows never alias each other.
+    """
+    row = dict(edge.obj_dict)
+    row["points"] = (source, destination)
+    row["attributes"] = dict(edge.obj_dict.get("attributes", {}))
+    row["lineage"] = edge.get_lineage()
+    return row
+
+
+def _subgraph_edge_statements(endpoint: FrozenDict) -> list[Edge]:
+    """Return all edge statements declared in a subgraph, recursively."""
+    subgraph = Subgraph(obj_dict=endpoint)
+    statements = list(subgraph.get_edges())
+    for nested in subgraph.get_subgraphs():
+        statements.extend(
+            _subgraph_edge_statements(FrozenDict(nested.obj_dict))
+        )
+    return statements
+
+
+def _subgraph_edges(endpoint: FrozenDict) -> list[Edge]:
+    """Expand every edge declared inside a subgraph endpoint.
+
+    Internal edge statements are expanded the same way as top-level ones
+    and keep their own declarations and segment numbers.
+    """
+    internal: list[Edge] = []
+    for statement in _subgraph_edge_statements(endpoint):
+        rows, deeper = _expanded_edges(statement)
+        internal.extend(rows)
+        internal.extend(deeper)
+    return internal
+
+
+def _all_subgraph_edges(graph: Graph) -> list[Edge]:
+    """Expand edges declared in every subgraph of ``graph``, recursively."""
+    internal: list[Edge] = []
+    for subgraph in graph.get_subgraphs():
+        internal.extend(_subgraph_edges(FrozenDict(subgraph.obj_dict)))
+    return internal
+
+
+def _expanded_edges(edge: Edge) -> tuple[list[Edge], list[Edge]]:
+    """Expand one parsed edge statement into adjacent-segment rows.
+
+    The second list holds the internal edges of any subgraph endpoint,
+    themselves expanded and carrying their own provenance.
+    """
+    internal: list[Edge] = []
+    for endpoint in (edge.get_source(), edge.get_destination()):
+        if isinstance(endpoint, FrozenDict):
+            internal.extend(_subgraph_edges(endpoint))
+
+    rows = [
+        Edge(
+            source,
+            destination,
+            obj_dict=_lineage_row_dict(edge, source, destination),
+        )
+        for source in _subgraph_members(edge.get_source())
+        for destination in _subgraph_members(edge.get_destination())
+    ]
+    return rows, internal
+
+
+def _internal_key(edge: Edge) -> tuple[Any, ...]:
+    provenance = edge.get_lineage()
+    return (
+        provenance.get("declaration"),
+        provenance.get("line"),
+        provenance.get("column"),
+        provenance.get("segment"),
+        _endpoint_label(edge.get_source()),
+        _endpoint_label(edge.get_destination()),
+    )
+
+
+def _statement_key(edge: Edge) -> tuple[Any, ...]:
+    provenance = edge.get_lineage()
+    return (
+        provenance.get("declaration"),
+        provenance.get("line"),
+        provenance.get("column"),
+    )
 
 
 class Graph(Common):
@@ -1388,6 +1567,98 @@ class Graph(Common):
             edge_objs.extend([Edge(obj_dict=obj_d) for obj_d in obj_dict_list])
 
         return edge_objs
+
+    def get_lineage_edges(self) -> list[Edge]:
+        """Expand edge statements into adjacent-segment lineage rows.
+
+        Each subgraph endpoint contributes its concrete node members.
+        One row is produced for every concrete pair joining two
+        consecutive endpoints of a statement, so a three-endpoint
+        statement `{A B} -> {C D} -> E` yields six rows and never a
+        direct `A -> E` shortcut. Internal edges declared inside a
+        subgraph endpoint are returned in document order and carry their
+        own declarations and segment numbers.
+
+        Returned rows keep the graph's conventions: `strict` graphs
+        collapse duplicate and reversed undirected rows, and `simplify`
+        graphs collapse duplicate rows. Each row has its own attribute
+        dictionary, so mutating one row never changes another.
+        """
+        rows: list[Edge] = []
+        internal: list[Edge] = []
+        statement_order: dict[tuple[Any, ...], int] = {}
+        for position, edge in enumerate(self.get_edge_list()):
+            expanded, nested = _expanded_edges(edge)
+            statement_order[_statement_key(edge)] = position
+            rows.extend(expanded)
+            internal.extend(nested)
+
+        for edge in _all_subgraph_edges(self):
+            statement_order[_statement_key(edge)] = len(statement_order)
+            internal.append(edge)
+
+        ordered: list[Edge] = []
+        seen_internal: set[tuple[Any, ...]] = set()
+        for edge in internal:
+            key = _internal_key(edge)
+            if key not in seen_internal:
+                seen_internal.add(key)
+                ordered.append(edge)
+        ordered.extend(rows)
+        ordered.sort(
+            key=lambda edge: (
+                edge.get_lineage().get("line") or 0,
+                edge.get_lineage().get("column") or 0,
+                statement_order.get(_statement_key(edge), 0),
+                edge.get_segment() or 0,
+            )
+        )
+
+        if not (self.get_strict() or self.get_simplify()):
+            return ordered
+
+        unique: list[Edge] = []
+        seen: set[tuple[str, str]] = set()
+        undirected = self.get_top_graph_type() != "digraph"
+        for edge in ordered:
+            source = _endpoint_label(edge.get_source())
+            destination = _endpoint_label(edge.get_destination())
+            key = (
+                tuple(sorted((source, destination)))
+                if undirected
+                else (source, destination)
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(edge)
+        return unique
+
+    def get_lineage(self) -> list[dict[str, Any]]:
+        """Return table-level lineage rows as serializable dictionaries.
+
+        Each row has `source`, `destination`, `declaration`,
+        `source_line`, `segment`, `segment_count`, `line`, and `column`
+        entries in document order.
+        """
+        table = []
+        for edge in self.get_lineage_edges():
+            provenance = edge.get_lineage()
+            table.append(
+                {
+                    "source": _endpoint_label(edge.get_source()),
+                    "destination": _endpoint_label(
+                        edge.get_destination()
+                    ),
+                    "declaration": provenance.get("declaration"),
+                    "source_line": provenance.get("source_line"),
+                    "segment": provenance.get("segment"),
+                    "segment_count": provenance.get("segment_count"),
+                    "line": provenance.get("line"),
+                    "column": provenance.get("column"),
+                }
+            )
+        return table
 
     def add_subgraph(self, sgraph: Subgraph) -> None:
         """Adds a subgraph object to the graph.

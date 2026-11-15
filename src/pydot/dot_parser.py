@@ -24,6 +24,7 @@ from pyparsing import (
     Forward,
     Group,
     Literal,
+    Located,
     OneOrMore,
     Optional,
     ParseException,
@@ -239,6 +240,7 @@ def push_attr_list(toks: ParseResults) -> P_AttrList:
 def push_edge_stmt(toks: ParseResults) -> list[pydot.core.Edge]:
     endpoints = list(toks.endpoints)
     attrs = expand_attr_lists(toks.attr_l)
+    segment_count = len(endpoints) - 1
 
     def make_endpoint(
         ep: pydot.core.Common | list[Any] | str,
@@ -256,13 +258,43 @@ def push_edge_stmt(toks: ParseResults) -> list[pydot.core.Edge]:
 
     edges: list[pydot.core.Edge] = []
     n_prev = make_endpoints(endpoints[0])
-    for endpoint in endpoints[1:]:
+    for segment, endpoint in enumerate(endpoints[1:], start=1):
         n_next = make_endpoints(endpoint)
-        edges.extend(
-            pydot.core.Edge(source, destination, **attrs)
-            for source, destination in itertools.product(n_prev, n_next)
-        )
+        for source, destination in itertools.product(n_prev, n_next):
+            edge = pydot.core.Edge(source, destination, **attrs)
+            edge.obj_dict["lineage"] = {
+                "segment": segment,
+                "segment_count": segment_count,
+            }
+            edges.append(edge)
         n_prev = n_next
+    return edges
+
+
+def push_located_edge_stmt(
+    instring: str, loc: int, toks: ParseResults
+) -> list[pydot.core.Edge]:
+    """Attach the original declaration and its location to edge rows."""
+    edges = list(toks.value)
+    start = int(toks.locn_start)
+    end = int(toks.locn_end)
+    line = lineno(start, instring)
+    column = start - instring.rfind("\n", 0, start)
+    declaration = instring[start:end].strip()
+
+    line_start = instring.rfind("\n", 0, start) + 1
+    line_end = instring.find("\n", start)
+    if line_end < 0:
+        line_end = len(instring)
+    source_line = instring[line_start:line_end]
+
+    for edge in edges:
+        edge.obj_dict["lineage"].update(
+            declaration=declaration,
+            source_line=source_line,
+            line=line,
+            column=column,
+        )
     return edges
 
 
@@ -349,9 +381,10 @@ class GraphParser:
     edge_point: ClassVar[ParserElement] = (
         subgraph | graph_stmt | Group(node_list)
     )
-    edge_stmt: ClassVar[ParserElement] = DelimitedList(
+    _edge_stmt_core: ClassVar[ParserElement] = DelimitedList(
         edge_point, delim=edgeop, min=2
     )("endpoints") + Optional(attr_list("attr_l"))
+    edge_stmt: ClassVar[ParserElement] = Located(_edge_stmt_core)
 
     assignment: ClassVar[ParserElement] = ID + "=" + righthand_id
 
@@ -387,7 +420,8 @@ class GraphParser:
 
     assignment.set_parse_action(push_attr_list)
     a_list.set_parse_action(push_attr_list)
-    edge_stmt.set_parse_action(push_edge_stmt)
+    _edge_stmt_core.set_parse_action(push_edge_stmt)
+    edge_stmt.set_parse_action(push_located_edge_stmt)
     node_stmt.set_parse_action(push_node_stmt)
     default_stmt.set_parse_action(push_default_stmt)
 
