@@ -530,6 +530,131 @@ are always blocked, even if not using an allowlist:
 If you really really need that - you can make your own wrappers and overrides.
 But I advise against it.
 
+Units
+-----
+
+Expressions often describe a derived metric (for example an average amount per
+item), and those metrics can be checked *before* they are published, without
+having any real trade values.  ``check_units`` is a static pass over the same
+AST that the evaluator uses; it never calls a field or a function:
+
+.. code-block:: pycon
+
+    >>> from simpleeval import check_units
+
+    >>> report = check_units(
+    ...     "amount / count",
+    ...     names={"amount": "CNY", "count": "件"},
+    ... )
+    >>> report.result_unit
+    Unit('CNY/件')
+    >>> report.ok
+    True
+
+Units are dimensions, not just labels.  ``CNY`` and ``USD`` are both currency
+and therefore compatible; ``CNY`` and ``件`` are not.  Compound units come from
+multiplication, division and powers::
+
+    amount * count   -> CNY·件
+    amount / count   -> CNY/件
+    count * price    -> CNY        (price is CNY/件)
+    amount ** 2      -> CNY^2
+
+Operators also imply requirements: ``+``, ``-``, ``%`` and comparisons need
+compatible units, and exponents must be dimensionless.  A plain number (or a
+purely numeric sub-expression) is treated as a unit-neutral multiplier or
+threshold, so ``amount * 0.9`` and ``amount > 1e6`` stay amounts:
+
+.. code-block:: pycon
+
+    >>> check_units("amount * 0.9", names={"amount": "CNY"}).result_unit
+    Unit('CNY')
+    >>> check_units("amount > 1e6", names={"amount": "CNY"}).ok
+    True
+    >>> check_units("amount > count", names={"amount": "CNY", "count": "件"}).ok
+    False
+
+.. _Unit branches:
+
+Branches and missing values
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Branches are merged by dimension.  A field declared as ``None`` (or as one of
+``missing`` / ``null`` / ``缺值`` / ``缺失``) is a missing value: it never
+changes the unit of a branch, so it can pass through a merge:
+
+.. code-block:: pycon
+
+    >>> check_units(
+    ...     "amount if available else missing_amount",
+    ...     names={"amount": "CNY", "available": "bool", "missing_amount": "缺值"},
+    ... ).ok
+    True
+
+This is deliberately *static*: every reachable branch is checked, regardless of
+which branches today's sample data happens to take.  If one reachable branch
+returns an amount and another returns a count, the report is invalid even when
+all current rows take the amount branch:
+
+.. code-block:: pycon
+
+    >>> report = check_units(
+    ...     "amount if is_bulk else count",
+    ...     names={"amount": "CNY", "count": "件", "is_bulk": "bool"},
+    ... )
+    >>> report.ok
+    False
+    >>> report.conflicts[0].left_position, report.conflicts[0].right_position
+    ((1, 0), (1, 23))
+
+Only a branch proven unreachable by constant folding is left out.  Its location
+and the reason are recorded in ``report.excluded_branches``:
+
+.. code-block:: pycon
+
+    >>> report = check_units(
+    ...     "amount if 1 == 2 else count",
+    ...     names={"amount": "CNY", "count": "件"},
+    ... )
+    >>> report.ok
+    True
+    >>> report.result_unit
+    Unit('件')
+    >>> report.excluded_branches[0].reason
+    'line 1, column 0: branch is unreachable because condition `1 == 2` is always false'
+
+Function signatures
+~~~~~~~~~~~~~~~~~~~
+
+A function may be declared with just a return unit, or with parameter units as
+well (``None`` means "any unit"):
+
+.. code-block:: pycon
+
+    >>> from simpleeval import UnitFunction
+
+    >>> check_units(
+    ...     "average(amount, count)",
+    ...     names={"amount": "CNY", "count": "件"},
+    ...     functions={"average": UnitFunction("CNY/件", ["CNY", "件"])},
+    ... ).result_unit
+    Unit('CNY/件')
+
+.. code-block:: pycon
+
+    >>> check_units(
+    ...     "average(count, amount)",
+    ...     names={"amount": "CNY", "count": "件"},
+    ...     functions={"average": UnitFunction("CNY/件", ["CNY", "件"])},
+    ... ).ok
+    False
+
+Pass ``strict=True`` to also treat undeclared names/functions as errors, and
+``values={"flag": True}`` when a condition is known independently of the actual
+trade data (for example a constant configuration flag).  The checker reports
+``unknown_names`` for anything it could not resolve, so it never silently
+assumes a dimension.
+
 Other...
 --------
 
