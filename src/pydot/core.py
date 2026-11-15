@@ -15,12 +15,22 @@ import re
 import subprocess
 import sys
 import warnings
-from typing import TYPE_CHECKING, Any, Final, Sequence, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Mapping,
+    Sequence,
+    Union,
+    cast,
+)
 
 if TYPE_CHECKING:
     # `typing_extensions` is always available in `TYPE_CHECKING` blocks,
     # even if not  installed
     from typing_extensions import Self, TypeAlias
+
+    from pydot.lineage import Column, LineageResult, OperatorPortMapping
 
 import pydot
 from pydot._vendor import tempfile
@@ -1142,6 +1152,60 @@ class Graph(Common):
         Refer to set_suppress_disconnected for more information.
         """
         return bool(self.obj_dict.get("suppress_disconnected", False))
+
+    def set_operator_mapping(
+        self,
+        operator: str,
+        mapping: OperatorPortMapping | Mapping[str | None, Any],
+        *,
+        direction: str | None = None,
+    ) -> OperatorPortMapping:
+        """Declare an operator's input/output port relationship.
+
+        ``mapping`` may be an :class:`pydot.lineage.OperatorPortMapping`,
+        or a plain mapping of ports, by default input port -> output
+        ports.  Mappings are stored on the graph so that they survive
+        copying and can be used by :meth:`trace_lineage` and
+        :class:`pydot.lineage.ColumnLineage`.
+        """
+        from pydot.lineage import OperatorPortMapping
+
+        normalized = (
+            mapping
+            if isinstance(mapping, OperatorPortMapping)
+            else OperatorPortMapping(mapping, direction=direction)
+        )
+        mappings = self.obj_dict.setdefault("operator_mappings", {})
+        mappings[operator] = normalized
+        return normalized
+
+    def get_operator_mapping(
+        self, operator: str
+    ) -> OperatorPortMapping | None:
+        """Return the operator port mapping declared for ``operator``."""
+        mappings = self.obj_dict.get("operator_mappings") or {}
+        return cast("OperatorPortMapping | None", mappings.get(operator))
+
+    def remove_operator_mapping(self, operator: str) -> bool:
+        """Remove a declared operator mapping.
+
+        Returns True if a mapping was present, False otherwise.
+        """
+        mappings = self.obj_dict.get("operator_mappings") or {}
+        return mappings.pop(operator, None) is not None
+
+    def trace_lineage(
+        self, column: Column | str, *, max_evidence: int = 10
+    ) -> LineageResult:
+        """Trace source columns that reach the given report column.
+
+        Use a ``"node:port"`` string or a
+        :class:`pydot.lineage.Column`.  Returns a
+        :class:`pydot.lineage.LineageResult`.
+        """
+        from pydot.lineage import ColumnLineage
+
+        return ColumnLineage(self).trace(column, max_evidence=max_evidence)
 
     def get_next_sequence_number(self) -> int:
         seq: int = self.obj_dict.get("current_child_sequence", 1)

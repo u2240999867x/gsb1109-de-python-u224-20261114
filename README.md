@@ -141,6 +141,42 @@ import pydot
 graph = networkx.drawing.nx_pydot.to_pydot(my_networkx_graph)
 ```
 
+#### Trace column lineage through port-aware operators
+
+A data pipeline can be described as a graph whose nodes are operators
+and whose edges carry named ports. Declare how each operator maps its
+input ports to its output ports, then trace which source columns
+actually reach a report column:
+
+```python
+import pydot
+
+graph = pydot.Dot("orders", graph_type="digraph")
+graph.add_edge(pydot.Edge("orders:amount", "calc:amount"))
+graph.add_edge(pydot.Edge("orders:tax", "calc:tax"))
+graph.add_edge(pydot.Edge("calc:total", "report:total"))
+
+# "amount" feeds "total"; "tax" is present on the operator but does not.
+graph.set_operator_mapping("calc", {"amount": ["total"]})
+
+result = graph.trace_lineage("report:total")
+assert result.source_names() == ["orders:amount"]
+```
+
+The mapping direction is input port to output ports by default.
+Use `direction="outputs_to_inputs"` (or
+`pydot.OperatorPortMapping.from_outputs(...)`) for the reverse
+direction. An operator with no mapping, or an output port that is not
+declared, forms an unknown boundary: the result reports
+`is_complete == False` and lists the boundary in `result.unknown`
+instead of silently attributing all operator inputs to the output.
+
+When multiple upstream paths reach the same output port, `sources`
+still lists every reachable source, while `evidence` contains at most
+`max_evidence` witness paths and `evidence_truncated` indicates that
+more paths exist. Because edges are read on every trace, rewiring an
+edge to a different port of the same node changes the result.
+
 ### 2. Edit
 
 You can now further manipulate your graph using pydot methods:

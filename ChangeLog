@@ -9,7 +9,13 @@ Pydot versions since 1.4.2 adhere to [PEP 440-style semantic versioning]
 4.0.2 (unreleased)
 ------------------
 
-- Nothing changed yet.
+Added:
+- Column lineage tracing for port-aware operator graphs.
+  `Graph.set_operator_mapping()` declares an operator's input/output
+  port relationship; `Graph.trace_lineage()` and
+  `pydot.trace_lineage()` report the source columns reachable from a
+  report column. Operators without a mapping produce an explicit
+  unknown-source boundary, and converging paths return bounded evidence.
 
 
 4.0.1 (2025-06-17)
