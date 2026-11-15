@@ -249,6 +249,10 @@ class _PipedCompressionProgram(io.IOBase):
             self.in_thread = threading.Thread(target=self._feed_pipe)
             self.in_thread.start()
             self._process_explicitly_terminated = False
+            # Whether the decompressed output stream has been read to EOF.
+            # It records the caller's evidence: at EOF the whole stream has
+            # been consumed; otherwise the caller stopped reading early.
+            self._at_eof = False
             self._file: BinaryIO = self.process.stdout  # type: ignore
             self._wait_for_output_or_process_exit()
             self._raise_if_error()
@@ -282,13 +286,30 @@ class _PipedCompressionProgram(io.IOBase):
         return self._file.write(arg)
 
     def read(self, *args) -> bytes:
-        return self._file.read(*args)
+        data = self._file.read(*args)
+        if args and args[0] == 0:
+            # read(0) returns b"" without reaching EOF.
+            return data
+        # An unbounded read only returns once the stream has been drained to
+        # EOF. A bounded read reaches EOF only when it returned no data.
+        if not data or not args or args[0] in (None, -1):
+            self._at_eof = True
+        return data
 
     def readinto(self, *args):
-        return self._file.readinto(*args)
+        n = self._file.readinto(*args)
+        if n == 0 and (not args or len(args[0]) > 0):
+            self._at_eof = True
+        return n
 
     def readline(self, *args) -> bytes:
-        return self._file.readline(*args)
+        line = self._file.readline(*args)
+        if args and args[0] == 0:
+            # readline(0) returns b"" without reaching EOF.
+            return line
+        if not line:
+            self._at_eof = True
+        return line
 
     def seekable(self) -> bool:
         return False
@@ -307,13 +328,23 @@ class _PipedCompressionProgram(io.IOBase):
             return
         check_allowed_code_and_message = False
         if "r" in self._mode:
-            retcode = self.process.poll()
-            if retcode is None:
-                # still running
-                self._process_explicitly_terminated = True
-                self.process.terminate()
+            if self._at_eof:
+                # The caller consumed the output stream to EOF and thus has
+                # evidence for the entire decompressed stream. Let the process
+                # report its real exit status: a corrupted tail or a failure of
+                # the decompressor itself must be raised, never masked.
+                if self.process.poll() is None:
+                    self.process.wait()
+            else:
+                # The caller stopped reading early (e.g. after a single line).
+                # This is an active stop: anything the decompressor does with
+                # the unread remainder of the stream is outside the caller's
+                # evidence. Terminate before touching the output pipe so a
+                # process blocked on a full pipe cannot deadlock the close, and
+                # treat the termination's exit code/message as allowed.
+                if self.process.poll() is None:
+                    self._terminate_process()
                 check_allowed_code_and_message = True
-                self.process.wait()
             self._feeding = False
             if self.in_thread:
                 self.in_thread.join()
@@ -328,6 +359,15 @@ class _PipedCompressionProgram(io.IOBase):
         if not self._error_raised:
             # Only check for errors if none have been found earlier.
             self._raise_if_error(check_allowed_code_and_message, stderr_message)
+
+    def _terminate_process(self) -> None:
+        """
+        Stop the decompression process explicitly. The resulting exit code is
+        expected to be one of the allowed termination codes/messages.
+        """
+        self._process_explicitly_terminated = True
+        self.process.terminate()
+        self.process.wait()
 
     def _wait_for_output_or_process_exit(self):
         """
@@ -401,7 +441,11 @@ class _PipedCompressionProgram(io.IOBase):
         return self
 
     def __next__(self) -> bytes:
-        return self._file.__next__()
+        try:
+            return self._file.__next__()
+        except StopIteration:
+            self._at_eof = True
+            raise
 
     def readable(self):
         return self._file.readable()

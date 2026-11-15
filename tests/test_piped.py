@@ -7,6 +7,7 @@ import io
 import os
 import shutil
 import sys
+import time
 from itertools import cycle
 from pathlib import Path
 
@@ -372,3 +373,94 @@ def test_piped_tool_fails_on_close(tmp_path):
         ) as f:
             f.write(b"Hello")
     assert "exit code 5" in e.value.args[0]
+
+
+def test_close_after_partial_read_is_clean(reader, create_large_file):
+    # An active early stop (only the first line is read) must not be reported
+    # as a decoding failure, even though the decompressor is killed on close.
+    program_settings, extension = reader
+    large_file = create_large_file(extension)
+    with _PipedCompressionProgram(
+        large_file, "rb", program_settings=program_settings
+    ) as f:
+        f.readline()
+
+
+def test_full_consumption_lets_process_finish(reader, create_large_file):
+    # Once the output has been read to EOF, the process must not be terminated:
+    # it finishes on its own so its real exit status is evaluated.
+    program_settings, extension = reader
+    large_file = create_large_file(extension)
+    f = _PipedCompressionProgram(large_file, "rb", program_settings=program_settings)
+    f.read()
+    f.close()
+    assert f._process_explicitly_terminated is False
+    assert f.process.returncode == 0
+
+
+@pytest.mark.timeout(5)
+def test_close_does_not_block_on_unread_pipe_output():
+    # only_zeroes.zst decompresses to 2 GiB, so after a tiny read the
+    # decompressor is blocked writing to a full pipe. Closing must terminate
+    # it before touching the output pipe and therefore return promptly.
+    if not shutil.which("zstd"):
+        pytest.skip("zstd program not available")
+    test_zst = TEST_DIR / "only_zeroes.zst"
+    # Match the long-window settings that xopen uses to read this frame.
+    program_settings = _ProgramSettings(
+        ("zstd", "--long=31"), tuple(range(1, 20)), "-T"
+    )
+    started = time.monotonic()
+    with _PipedCompressionProgram(
+        test_zst, "rb", program_settings=program_settings
+    ) as f:
+        assert f.read(64) == bytes(64)
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.timeout(5)
+def test_truncated_stream_raises_after_full_consumption(reader, create_truncated_file):
+    # Reading the whole stream gives evidence for its entirety, so a corrupted
+    # tail observed by the decompressor must surface as an OSError on close.
+    program_settings, extension = reader
+    truncated_file = create_truncated_file(extension)
+    f = _PipedCompressionProgram(
+        truncated_file, "rb", program_settings=program_settings
+    )
+    with pytest.raises(OSError):
+        f.read()
+        f.close()
+
+
+def test_truncated_stream_partial_read_matches_evidence_scope(
+    reader, create_truncated_file
+):
+    # A single line is the only evidence the caller has. The corruption lives
+    # in the unread tail, so the active early stop closes cleanly.
+    program_settings, extension = reader
+    truncated_file = create_truncated_file(extension)
+    with _PipedCompressionProgram(
+        truncated_file, "rb", program_settings=program_settings
+    ) as f:
+        f.readline()
+
+
+def test_corruption_observed_before_close_is_not_masked(tmp_path):
+    # When the decompressor fails on its own before close(), a later close
+    # must not erase the already observed upstream error.
+    if not PIPED_GZIP_PROGRAMS:
+        pytest.skip("no piped gzip program available")
+    corrupted = tmp_path / "small.gz"
+    data = gzip.compress(b"first line\n" + b"x" * 1000 + b"\n")
+    corrupted.write_bytes(data[:-8])
+    f = _PipedCompressionProgram(
+        corrupted, "rb", program_settings=PIPED_GZIP_PROGRAMS[0]
+    )
+    f.readline()
+    # The small stream fits into the pipe buffers, so gzip exits on its own.
+    deadline = time.monotonic() + 3
+    while f.process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert f.process.poll() is not None
+    with pytest.raises(OSError):
+        f.close()
