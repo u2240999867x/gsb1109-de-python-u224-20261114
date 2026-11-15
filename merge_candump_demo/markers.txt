@@ -1,0 +1,3 @@
+tolerance 0.005
+anchor 1 1
+anchor 5 4
