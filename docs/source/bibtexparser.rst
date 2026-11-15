@@ -10,7 +10,14 @@ Full API
 ----------------------------------------------
 
 .. automodule:: bibtexparser
-    :members: parse_string, parse_file, write_string, write_file
+    :members: parse_string, parse_file, parse_stream, parse_chunks, write_string, write_file
+
+
+:mod:`bibtexparser.chunked` --- Parsing text arriving in chunks
+----------------------------------------------------------------
+
+.. automodule:: bibtexparser.chunked
+    :members:
 
 
 :mod:`bibtexparser.Library` --- The class containing the parsed library

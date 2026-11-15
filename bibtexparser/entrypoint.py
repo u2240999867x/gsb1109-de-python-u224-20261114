@@ -6,6 +6,10 @@ from copy import deepcopy
 from typing import Optional
 from typing import TextIO
 
+from .chunked import SOURCE_END_KEY
+from .chunked import SOURCE_START_KEY
+from .chunked import ChunkedSplitter
+from .chunked import source_span
 from .library import Library
 from .middlewares.enclosing import REMOVED_ENCLOSING_KEY
 from .middlewares.middleware import Middleware
@@ -214,6 +218,79 @@ def parse_string(
     new_blocks = [b for b in parsed.blocks if not _is_seeded_string(b)]
     library.add(new_blocks, fail_on_duplicate_key=False)
     return library
+
+
+def parse_stream(
+    chunks: Iterable[str],
+    parse_stack: Iterable[Middleware] | None = None,
+    append_middleware: Iterable[Middleware] | None = None,
+    library: Library | None = None,
+) -> Library:
+    """Parse BibTeX text arriving in successive chunks.
+
+    Unlike calling :func:`parse_string` on each chunk, a chunk may end in the
+    middle of a block (e.g. right after a backslash, inside a quoted value, or
+    inside a multi-byte character). Such a truncated tail is buffered and
+    re-parsed together with the next chunk instead of being reported as a
+    failed block. A genuinely malformed region is still reported as a
+    :class:`~bibtexparser.model.ParsingFailedBlock` whose ``raw`` keeps the
+    original text, and parsing resumes at the next top-level block.
+
+    The resulting blocks are identical to those of :func:`parse_string` on
+    the concatenation of all chunks. Every block carries its position in the
+    concatenated input under the ``source_start``/``source_end`` parser
+    metadata (also see :func:`bibtexparser.chunked.source_span`).
+
+    :param chunks: Iterable of BibTeX text chunks, in order.
+    :param parse_stack: See :func:`parse_string`.
+    :param append_middleware: See :func:`parse_string`.
+    :param library: Library to add the parsed blocks to. If ``None`` (default),
+        a new library is created and returned; otherwise the passed library is
+        mutated and returned, with the same semantics as in
+        :func:`parse_string`.
+    :return: The library containing the blocks parsed from all chunks.
+    """
+    middlewares = _build_parse_stack(parse_stack, append_middleware)
+    target_library = library if library is not None else Library()
+    splitter = ChunkedSplitter()
+
+    def _apply(blocks: list) -> None:
+        if not blocks:
+            return
+        parsed = Library(blocks=blocks, fail_on_duplicate_key=False)
+        _seed_preexisting_strings(parsed, target_library)
+        for middleware in middlewares:
+            parsed = middleware.transform(library=parsed)
+        new_blocks = [b for b in parsed.blocks if not _is_seeded_string(b)]
+        existing_count = len(target_library.blocks)
+        target_library.add(new_blocks, fail_on_duplicate_key=False)
+        # `add` may wrap a block duplicating a pre-existing key; the wrapper is
+        #   a new object and would otherwise lose the source position.
+        for block in target_library.blocks[existing_count:]:
+            if source_span(block) is None:
+                duplicate = getattr(block, "ignore_error_block", None)
+                span = source_span(duplicate) if duplicate is not None else None
+                if span is not None:
+                    block.set_parser_metadata(SOURCE_START_KEY, span[0])
+                    block.set_parser_metadata(SOURCE_END_KEY, span[1])
+
+    for chunk in chunks:
+        _apply(splitter.feed(chunk))
+    _apply(splitter.close())
+    return target_library
+
+
+def parse_chunks(
+    chunks: Iterable[str],
+    parse_stack: Iterable[Middleware] | None = None,
+    append_middleware: Iterable[Middleware] | None = None,
+) -> Library:
+    """Parse an ordered sequence of BibTeX chunks into a fresh library.
+
+    Thin convenience wrapper around :func:`parse_stream` with no pre-existing
+    library; see there for the chunking guarantees.
+    """
+    return parse_stream(chunks, parse_stack=parse_stack, append_middleware=append_middleware)
 
 
 def _is_seeded_string(block: Block) -> bool:
