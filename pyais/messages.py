@@ -1,4 +1,5 @@
 import abc
+import dataclasses
 import datetime
 import functools
 import json
@@ -32,7 +33,7 @@ from pyais.constants import (
     InlandLoadedType
 )
 from pyais.exceptions import InvalidNMEAMessageException, TagBlockNotInitializedException, UnknownMessageException, UnknownPartNoException, \
-    InvalidDataTypeException, MissingPayloadException
+    InvalidDataTypeException, MissingPayloadException, AnomalousNameExtensionException
 from pyais.util import SIX_BIT_ENCODING, ParsedDimensions, SixBitNibleEncoder, checksum, compute_checksum, decode_bytes_as_ascii6, get_itdma_comm_state, get_sotdma_comm_state, chk_to_int, coerce_val, b64encode_str, is_auxiliary_craft, parse_dimensions
 
 NMEA_VALUE = typing.Union[str, float, int, bool, bytes]
@@ -1091,6 +1092,9 @@ class Payload(abc.ABC):
         fields = self.field_dict()
         slt: str
         for slt in self.__slots__:
+            # internal evidence/audit slots are exposed through dedicated properties
+            if slt.startswith('_'):
+                continue
             # ignore spare fields
             if ignore_spare and slt in fields:
                 field = fields[slt]
@@ -3630,6 +3634,50 @@ class MessageType20(Payload):
     increment4 = bit_field(11, int, default=0, signed=False)
 
 
+@dataclasses.dataclass(frozen=True)
+class AtonNameAudit:
+    """Verifiable decoding evidence for the name of a type 21 AtoN report.
+
+    Attributes:
+        name: Usable main name (terminator and explicit trailing padding removed,
+            valid symbols in the middle are kept).
+        name_raw_bit_length: Original bit length occupied by the main name field
+            in the received payload.
+        name_remainder_bits: Trailing bits of the main name field that could not
+            form a whole 6-bit character (0-5).
+        name_terminated: Whether an explicit '@' terminator appeared before the
+            end of the 20-character main name field.
+        name_is_full: Whether all 20 main name characters are occupied. Only then
+            may the name extension be appended.
+        name_extension: Decoded extension text, or None when absent/empty.
+        extension_raw_bit_length: Original bit length occupied by the extension.
+        extension_remainder_bits: Trailing extension bits that could not form a
+            whole 6-bit character (0-5).
+        extension_present: Whether the extension carries any usable character.
+        extension_anomaly: True when the main name was terminated early while an
+            extension is present. Such an extension must not be appended.
+    """
+    name: str
+    name_raw_bit_length: int
+    name_remainder_bits: int
+    name_terminated: bool
+    name_is_full: bool
+    name_extension: Optional[str]
+    extension_raw_bit_length: int
+    extension_remainder_bits: int
+    extension_present: bool
+    extension_anomaly: bool
+
+
+def _compose_aton_full_name(audit: AtonNameAudit) -> str:
+    """Join main name and extension only when all 20 main characters are used."""
+    if not audit.name:
+        return ""
+    if audit.name_is_full and not audit.extension_anomaly and audit.name_extension:
+        return f"{audit.name}{audit.name_extension}"
+    return audit.name
+
+
 @attr.s(slots=True)
 class MessageType21(Payload):
     """
@@ -3663,16 +3711,94 @@ class MessageType21(Payload):
     name_ext = bit_field(88, str, default='')
 
     @functools.cached_property
+    def _name_audit(self) -> AtonNameAudit:
+        """Fallback evidence for objects built with create() instead of decoding."""
+        name = self.name or ""
+        extension = self.name_ext or None
+        return AtonNameAudit(
+            name=name,
+            name_raw_bit_length=len(name) * 6,
+            name_remainder_bits=0,
+            name_terminated=False,
+            name_is_full=len(name) == self._name_field_characters(),
+            name_extension=extension,
+            extension_raw_bit_length=len(extension or "") * 6,
+            extension_remainder_bits=0,
+            extension_present=bool(extension),
+            extension_anomaly=False,
+        )
+
+    @property
+    def name_audit(self) -> AtonNameAudit:
+        """Verifiable name decode result (raw bit lengths, remainder bits, anomaly)."""
+        return self._name_audit
+
+    @functools.cached_property
     def full_name(self) -> str:
-        """The name field is up to 20 characters of 6-bit ASCII. If this field
-        is full (has no trailing @ characters) the decoder should interpret
-        the Name Extension field later in the message (no more than 14 6-bit
-        characters) and concatenate it to this one to obtain the full name."""
-        if self.name:
-            if self.name_ext:
-                return f"{self.name}{self.name_ext}"
-            return str(self.name)
-        return ""
+        """The name field holds up to 20 characters of 6-bit ASCII. The extension
+        is appended only when all 20 main characters are occupied; an extension
+        found behind an early '@' terminator is anomalous and never appended."""
+        return _compose_aton_full_name(self._name_audit)
+
+    def require_valid_full_name(self) -> str:
+        """Return the full name, raising when an anomalous extension is present.
+
+        :raises AnomalousNameExtensionException: the main name was terminated early
+            while a non-empty extension exists.
+        """
+        audit = self._name_audit
+        if audit.extension_anomaly:
+            raise AnomalousNameExtensionException(
+                f"Type 21 message {self.mmsi}: name terminator '@' encountered after "
+                f"{len(audit.name)} characters but extension "
+                f"{audit.name_extension!r} is present; the extension was not appended "
+                f"to the name {audit.name!r}."
+            )
+        return self.full_name
+
+    @classmethod
+    def _name_field_characters(cls) -> int:
+        return int(cls.field_dict()['name'].metadata['width']) // 6
+
+    @classmethod
+    def from_vector(cls, bv: bit_vector) -> "MessageType21":
+        obj = typing.cast("MessageType21", super().from_vector(bv))
+
+        offsets = {entry[0]: (entry[1], entry[2]) for entry in cls.decoder_plan()}
+        name_start, name_width = offsets['name']
+        ext_start, ext_width = offsets['name_ext']
+
+        name_result = bv.get_text(name_start, name_width)
+        ext_result = bv.get_text(ext_start, ext_width)
+
+        # All 20 main characters are occupied only when padding removal left the
+        # full number of usable characters. This covers both '@' and space padding.
+        name_is_full = len(name_result.text) == name_width // 6
+        extension = ext_result.text or None
+        extension_present = bool(extension)
+        extension_anomaly = name_result.terminated and extension_present
+
+        obj._name_audit = AtonNameAudit(
+            name=name_result.text,
+            name_raw_bit_length=name_result.raw_bit_length,
+            name_remainder_bits=name_result.remainder_bits,
+            name_terminated=name_result.terminated,
+            name_is_full=name_is_full,
+            name_extension=extension,
+            extension_raw_bit_length=ext_result.raw_bit_length,
+            extension_remainder_bits=ext_result.remainder_bits,
+            extension_present=extension_present,
+            extension_anomaly=extension_anomaly,
+        )
+
+        # Replace the generic get_str() values with the boundary-aware decode so
+        # that a partial trailing character is dropped instead of fabricated.
+        # Fields that do not occur in the received vector stay None.
+        if name_result.raw_bit_length:
+            obj.name = name_result.text
+        if ext_result.raw_bit_length:
+            obj.name_ext = extension
+        return obj
 
 
 @attr.s(slots=True)

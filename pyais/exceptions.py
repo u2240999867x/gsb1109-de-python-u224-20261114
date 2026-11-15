@@ -43,3 +43,13 @@ class TagBlockNotInitializedException(Exception):
 class MissingPayloadException(AISBaseException):
     """Valid NMEA Message without payload"""
     pass
+
+
+class AnomalousNameExtensionException(AISBaseException):
+    """A type 21 AtoN name extension is present although the 20-character
+    main name was terminated early by an '@' character.
+
+    The extension must only be interpreted when all 20 characters of the
+    main name are used, so such an extension is anomalous and must not be
+    appended to the name."""
+    pass

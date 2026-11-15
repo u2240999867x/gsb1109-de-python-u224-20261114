@@ -1,7 +1,8 @@
 import random
 import unittest
 
-from pyais.bit_vector import int_bit_vector, word_bit_vector
+from pyais.bit_vector import int_bit_vector, word_bit_vector, DecodedText
+from pyais.util import SIX_BIT_ENCODING
 
 
 class BitVectorEqualityTestCase(unittest.TestCase):
@@ -65,6 +66,57 @@ class BitVectorEqualityTestCase(unittest.TestCase):
     def test_eq(self):
         self.assertEqual(int_bit_vector(b'0', 2), int_bit_vector(b'1', 2))
         self.assertEqual(word_bit_vector(b'0', 2), word_bit_vector(b'1', 2))
+
+
+class DecodedTextFieldTestCase(unittest.TestCase):
+    @staticmethod
+    def _payload(text):
+        from pyais.util import PAYLOAD_ARMOR
+        return ''.join(PAYLOAD_ARMOR[SIX_BIT_ENCODING[c]] for c in text).encode()
+
+    def test_complete_characters_with_bookkeeping(self):
+        payload = self._payload('ABCDEFGHIJKLMNOPQRSTUVWXYZ@')  # 27 chars -> 162 bits
+        for cls in (int_bit_vector, word_bit_vector):
+            bv = cls(payload, 1)  # 161 bits -> 26 complete chars + a 5-bit remainder
+            self.assertEqual(len(bv), 161)
+            result = bv.get_text(0, 167)
+
+            self.assertIsInstance(result, DecodedText)
+            self.assertEqual(result.text, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+            self.assertEqual(len(result.raw_characters), 26)
+            self.assertEqual(result.raw_bit_length, 161)
+            self.assertEqual(result.remainder_bits, 5)
+            self.assertFalse(result.terminated)
+
+    def test_partial_character_is_not_fabricated(self):
+        # 26 complete characters followed by exactly 5 non-zero trailing bits.
+        payload = self._payload('ABCDEFGHIJKLMNOPQRSTUVWXYZ@')
+        for cls in (int_bit_vector, word_bit_vector):
+            bv = cls(payload, 1)
+            result = bv.get_text(0, 167)
+            self.assertEqual(result.remainder_bits, 5)
+            self.assertNotIn('@', result.text)
+            self.assertEqual(result.text, result.raw_characters)
+
+    def test_terminator_stops_text_but_keeps_raw_symbols(self):
+        payload = self._payload('SHORT@@@@@@@@@@')
+        result = int_bit_vector(payload, 0).get_text(0, 90)
+        self.assertEqual(result.text, 'SHORT')
+        self.assertTrue(result.terminated)
+        self.assertEqual(result.raw_characters, 'SHORT@@@@@@@@@@')
+        self.assertEqual(result.raw_bit_length, 90)
+        self.assertEqual(result.remainder_bits, 0)
+
+    def test_trailing_padding_removed_middle_symbols_kept(self):
+        payload = self._payload('A B  @@@@@@@@@@')
+        result = int_bit_vector(payload, 0).get_text(0, 90)
+        self.assertEqual(result.text, 'A B')
+        self.assertTrue(result.raw_characters.startswith('A B  @'))
+
+    def test_field_outside_vector_is_empty(self):
+        bv = int_bit_vector(self._payload('ABC'), 0)
+        result = bv.get_text(100, 120)
+        self.assertEqual(result, DecodedText('', 0, 0, False, ''))
 
 
 if __name__ == '__main__':

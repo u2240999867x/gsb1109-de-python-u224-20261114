@@ -2,6 +2,7 @@
 This bit vector uses pre-computed lookup tables and stores the entire payload as a single
 arbitrary-precision int so that every field extraction is a constant-time shift-and-mask operation.
 """
+import dataclasses
 import sys
 import typing as t
 from base64 import b64decode
@@ -39,6 +40,79 @@ _SIXBIT_CHAR: t.Final[tuple[str, ...]] = tuple(
 # Bitmasks: _MASK[n] = (1 << n) - 1
 # 257 entries covers every realistic AIS field width.
 _MASK: t.Final[tuple[int, ...]] = tuple((1 << n) - 1 for n in range(257))
+
+
+@dataclasses.dataclass(frozen=True)
+class DecodedText:
+    """Verifiable result of decoding a 6-bit ASCII text field.
+
+    Attributes:
+        text: The usable name characters. Explicit '@' terminators and the
+            explicit trailing padding are removed, while valid symbols in the
+            middle of the name are always preserved.
+        raw_bit_length: Number of bits that actually belonged to the field and
+            were present in the payload. It is the original bit length of the
+            field as received (never the nominal field width).
+        remainder_bits: Number of trailing bits that could not form a whole
+            6-bit character (0-5). These bits are never turned into a character.
+        terminated: Whether an explicit '@' terminator was encountered inside
+            the field.
+        raw_characters: Every 6-bit character that fully fit in the received
+            field, before terminator or padding removal. This keeps the raw
+            symbols (including '@' and padding) available for verification.
+    """
+    text: str
+    raw_bit_length: int
+    remainder_bits: int
+    terminated: bool
+    raw_characters: str
+
+
+def decode_text_field(get: t.Callable[[int, int], int], start: int, width: int,
+                      vector_length: int) -> DecodedText:
+    """Decode a 6-bit ASCII field with exact bookkeeping.
+
+    Only complete 6-bit characters that fit inside the received bit vector are
+    decoded. A partial trailing character is reported through
+    ``remainder_bits`` instead of being padded into a fabricated character.
+
+    Args:
+        get: Bound ``bit_vector.get`` callable returning the value of a bit range.
+        start: Bit offset at which the field starts.
+        width: Nominal field width in bits.
+        vector_length: Total number of bits available in the payload.
+
+    Returns:
+        A :class:`DecodedText` with the usable text and the boundary details.
+    """
+    if width <= 0 or start >= vector_length:
+        return DecodedText("", 0, 0, False, "")
+
+    available = min(width, vector_length - start)
+    complete_chars, remainder_bits = divmod(available, 6)
+
+    chars = _SIXBIT_CHAR
+    raw = "".join(chars[get(start + index * 6, 6)] for index in range(complete_chars))
+
+    terminated_at = raw.find("@")
+    if terminated_at != -1:
+        text = raw[:terminated_at]
+        terminated = True
+    else:
+        text = raw
+        terminated = False
+
+    # Remove only explicit trailing padding; valid symbols inside the name stay.
+    # The rstrip("@")/strip() pairing matches the historical get_str() output.
+    text = text.rstrip("@").strip()
+
+    return DecodedText(
+        text=text,
+        raw_bit_length=available,
+        remainder_bits=remainder_bits,
+        terminated=terminated,
+        raw_characters=raw,
+    )
 
 
 class int_bit_vector:
@@ -118,6 +192,11 @@ class int_bit_vector:
         get = self.get
         parts: list[str] = [chars[get(i, 6)] for i in range(start, start + width, 6)]
         return "".join(parts).rstrip("@").strip()
+
+    def get_text(self, start: int, width: int) -> DecodedText:
+        """Return a 6-bit text field together with its raw bit length and the
+        trailing bits that could not form a complete character."""
+        return decode_text_field(self.get, start, width, self._length)
 
     def get_bytes(self, start: int, width: int) -> bytes:
         """Return the value of *width* bits at bit position *start* as bytes."""
@@ -269,6 +348,11 @@ class word_bit_vector:
         chars = _SIXBIT_CHAR
         parts: t.List[str] = [chars[self.get(i, 6)] for i in range(start, start + width, 6)]
         return "".join(parts).rstrip("@").strip()
+
+    def get_text(self, start: int, width: int) -> DecodedText:
+        """Return a 6-bit text field together with its raw bit length and the
+        trailing bits that could not form a complete character."""
+        return decode_text_field(self.get, start, width, self._length)
 
     def get_bytes(self, start: int, width: int) -> bytes:
         """Return the value of *width* bits at bit position *start* as bytes."""

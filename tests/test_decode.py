@@ -9,7 +9,7 @@ import unittest
 
 from pyais import NMEAMessage, encode_dict, encode_msg
 from pyais.ais_types import AISType
-from pyais.bit_vector import bit_vector
+from pyais.bit_vector import bit_vector, int_bit_vector, word_bit_vector
 from pyais.constants import (
     AtoNDimensionType,
     EpfdType,
@@ -25,6 +25,7 @@ from pyais.constants import (
 )
 from pyais.decode import decode, decode_nmea_and_ais, decode_nmea_line
 from pyais.exceptions import (
+    AnomalousNameExtensionException,
     InvalidNMEAChecksum,
     InvalidNMEAMessageException,
     MissingMultipartMessageException,
@@ -33,9 +34,11 @@ from pyais.exceptions import (
 from pyais.messages import (
     MSG_CLASS,
     AISSentence,
+    AtonNameAudit,
     GatehouseSentence,
     MessageType16DestinationA,
     MessageType16DestinationAB,
+    MessageType21,
     MessageType28,
     MessageType5,
     MessageType6,
@@ -2296,6 +2299,123 @@ class TestAIS(unittest.TestCase):
         decoded = decode(raw)
 
         assert decoded.full_name == "NNG-OSS-S OFFSHORE WINDFARM"
+
+    @staticmethod
+    def _encode_type_21_payload(**kwargs):
+        payload, fill = MessageType21.create(**kwargs).encode()
+        return payload, fill
+
+    def _decode_type_21(self, vector_cls, **kwargs):
+        payload, fill = self._encode_type_21_payload(**kwargs)
+        bv = vector_cls(payload.encode(), fill)
+        return MessageType21.from_vector(bv)
+
+    def test_type_21_full_name_joined_only_when_all_20_characters_used(self):
+        for vector_cls in (int_bit_vector, word_bit_vector):
+            decoded = self._decode_type_21(
+                vector_cls, mmsi=1, name='ABCDEFGHIJKLMNOPQRST', name_ext='WXYZ'
+            )
+            audit = decoded.name_audit
+
+            self.assertEqual(decoded.full_name, 'ABCDEFGHIJKLMNOPQRSTWXYZ')
+            self.assertIsInstance(audit, AtonNameAudit)
+            self.assertEqual(audit.name, 'ABCDEFGHIJKLMNOPQRST')
+            self.assertTrue(audit.name_is_full)
+            self.assertFalse(audit.name_terminated)
+            self.assertEqual(audit.name_extension, 'WXYZ')
+            self.assertFalse(audit.extension_anomaly)
+            # The 4 fill bits are excluded: 356 received bits -> 84 extension bits.
+            self.assertEqual(audit.name_raw_bit_length, 120)
+            self.assertEqual(audit.name_remainder_bits, 0)
+            self.assertEqual(audit.extension_raw_bit_length, 84)
+            self.assertEqual(audit.extension_remainder_bits, 0)
+            self.assertEqual(decoded.require_valid_full_name(), 'ABCDEFGHIJKLMNOPQRSTWXYZ')
+
+    def test_type_21_early_terminator_with_extension_is_anomalous(self):
+        for vector_cls in (int_bit_vector, word_bit_vector):
+            decoded = self._decode_type_21(
+                vector_cls, mmsi=2, name='SHORT', name_ext='WXYZ'
+            )
+            audit = decoded.name_audit
+
+            # The extension must never be appended behind an early '@' terminator.
+            self.assertEqual(decoded.name, 'SHORT')
+            self.assertEqual(decoded.name_ext, 'WXYZ')
+            self.assertEqual(decoded.full_name, 'SHORT')
+            self.assertTrue(audit.name_terminated)
+            self.assertFalse(audit.name_is_full)
+            self.assertTrue(audit.extension_present)
+            self.assertTrue(audit.extension_anomaly)
+            with self.assertRaises(AnomalousNameExtensionException):
+                decoded.require_valid_full_name()
+
+    def test_type_21_early_terminator_without_extension_is_not_anomalous(self):
+        decoded = self._decode_type_21(int_bit_vector, mmsi=3, name='SHORT')
+        audit = decoded.name_audit
+
+        self.assertEqual(decoded.full_name, 'SHORT')
+        self.assertTrue(audit.name_terminated)
+        self.assertFalse(audit.name_is_full)
+        self.assertFalse(audit.extension_present)
+        self.assertFalse(audit.extension_anomaly)
+        self.assertEqual(decoded.require_valid_full_name(), 'SHORT')
+
+    def test_type_21_trailing_padding_removed_but_middle_symbols_kept(self):
+        decoded = self._decode_type_21(int_bit_vector, mmsi=4, name='A B-1  ')
+        # Spaces and the hyphen inside the name are valid symbols and survive,
+        # only the explicit trailing padding is stripped.
+        self.assertEqual(decoded.name, 'A B-1')
+        self.assertEqual(decoded.full_name, 'A B-1')
+        self.assertEqual(decoded.name_audit.name, 'A B-1')
+
+    def test_type_21_one_bit_short_name_keeps_last_complete_character(self):
+        payload, _ = self._encode_type_21_payload(
+            mmsi=5, name='ABCDEFGHIJKLMNOPQRST', name_ext='WXYZ'
+        )
+        # 27 armor characters == 162 bits; the name field ends one bit early,
+        # so its 20th character has only 5 usable bits.
+        short_payload = payload[:27].encode()
+
+        for vector_cls in (int_bit_vector, word_bit_vector):
+            bv = vector_cls(short_payload, 0)
+            self.assertEqual(len(bv), 162)
+            decoded = MessageType21.from_vector(bv)
+            audit = decoded.name_audit
+
+            # Only the 19 complete characters are returned; no fabricated 20th.
+            self.assertEqual(decoded.name, 'ABCDEFGHIJKLMNOPQRS')
+            self.assertEqual(decoded.name[-1], 'S')
+            self.assertEqual(len(decoded.name), 19)
+            self.assertEqual(audit.name_raw_bit_length, 119)
+            self.assertEqual(audit.name_remainder_bits, 5)
+            self.assertFalse(audit.name_is_full)
+            # The extension field does not exist in the truncated payload.
+            self.assertIsNone(decoded.name_ext)
+            self.assertEqual(audit.extension_raw_bit_length, 0)
+            self.assertFalse(audit.extension_present)
+
+    def test_type_21_name_audit_is_exposed_but_not_dumped(self):
+        decoded = self._decode_type_21(
+            int_bit_vector, mmsi=6, name='ABCDEFGHIJKLMNOPQRST', name_ext='WXYZ'
+        )
+        data = decoded.asdict()
+        self.assertIn('full_name', data)
+        self.assertNotIn('_name_audit', data)
+        self.assertEqual(data['full_name'], 'ABCDEFGHIJKLMNOPQRSTWXYZ')
+        # JSON serialization keeps working.
+        self.assertTrue(decoded.to_json())
+
+    def test_type_21_created_message_has_consistent_fallback_audit(self):
+        created = MessageType21.create(mmsi=7, name='ABCDEFGHIJKLMNOPQRST', name_ext='WXYZ')
+        audit = created.name_audit
+        self.assertEqual(created.full_name, 'ABCDEFGHIJKLMNOPQRSTWXYZ')
+        self.assertTrue(audit.name_is_full)
+        self.assertEqual(audit.name_remainder_bits, 0)
+        self.assertEqual(audit.extension_remainder_bits, 0)
+
+        short = MessageType21.create(mmsi=8, name='SHORT', name_ext='WXYZ')
+        self.assertFalse(short.name_audit.name_is_full)
+        self.assertEqual(short.full_name, 'SHORT')
 
     def test_decode_fragment_count_0(self):
         msg = b"!AAVDM,0,1,,B,16UK7Fi0?w4tQF0l4Q@>401v1PS;,0*0F"
