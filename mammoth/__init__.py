@@ -1,8 +1,20 @@
 from . import docx, conversion, options, images, transforms, underline
 from .raw_text import extract_raw_text_from_element
 from .docx.style_map import write_style_map, read_style_map
+from .docx.content_controls import (
+    extract_content_controls,
+    extract_control_groups,
+)
 
-__all__ = ["convert_to_html", "extract_raw_text", "images", "transforms", "underline"]
+__all__ = [
+    "convert_to_html",
+    "extract_raw_text",
+    "extract_content_controls",
+    "extract_control_groups",
+    "images",
+    "transforms",
+    "underline",
+]
 
 
 _undefined = object()

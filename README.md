@@ -342,6 +342,43 @@ Each paragraph is followed by two newlines.
 
   * `messages`: any messages, such as errors and warnings
 
+#### `mammoth.extract_control_groups(fileobj)`
+
+Extract bound structured document tags (content controls) grouped by their
+outer repeating item.
+Controls are associated using their `w:dataBinding` (XPath, custom XML data
+store and prefix mappings) rather than their visible label,
+so controls that share a label, or whose visible order has been changed,
+are still matched back to the original bound XML.
+Controls that still show their placeholder prompt
+(`w:showingPlcHdr`) are reported with `is_placeholder` set to true and
+`displayed_value` set to `null`: the placeholder text is kept in
+`placeholder_text` and is never treated as a filled-in value,
+while the bound XML value is still available as `bound_value`.
+
+* `fileobj`: a file-like object containing the source document.
+  Files should be opened in binary mode.
+
+* Returns a result whose `value` is a list of groups, each with:
+
+  * `index`: position of the group in the document
+
+  * `store_item_id`: ID of the bound custom XML data store
+
+  * `repeat_path`: canonical path of the repeating XML node for the group
+
+  * `controls`: the controls in the group, in visible order.
+    Each control exposes `name`, `tag`, `group_index`, `xpath`,
+    `effective_xpath`, `display_text`, `displayed_value`, `bound_value`,
+    `is_placeholder` and `placeholder_text`.
+
+#### `mammoth.extract_content_controls(fileobj)`
+
+Behaves the same as `extract_control_groups`,
+but the result `value` is a flat list of the controls across all groups.
+Each control retains its `group_index`,
+allowing the original grouping to be reconstructed.
+
 #### `mammoth.embed_style_map(fileobj, style_map)`
 
 Embeds the style map `style_map` into `fileobj`.

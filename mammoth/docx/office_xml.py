@@ -3,7 +3,6 @@ from .xmlparser import parse_xml, XmlElement
 
 
 _namespaces = [
-    # Transitional format
     ("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
     ("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
     ("wp", "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"),
@@ -23,11 +22,16 @@ _namespaces = [
     ("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
     ("v", "urn:schemas-microsoft-com:vml"),
     ("office-word", "urn:schemas-microsoft-com:office:word"),
+    ("ds", "http://schemas.openxmlformats.org/officeDocument/2006/customXml"),
 
     # [MS-DOCX]: Word Extensions to the Office Open XML (.docx) File Format
     # https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/b839fe1f-e1ca-4fa6-8c26-5954d0abbccd
     ("wordml", "http://schemas.microsoft.com/office/word/2010/wordml"),
 ]
+
+
+def namespace_mappings():
+    return list(_namespaces)
 
 
 def read(fileobj):
